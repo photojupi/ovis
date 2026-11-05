@@ -1138,10 +1138,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   apps keep it; the roster has only the label filter below, which the maintainer approved in #1043
   and which differs from the palette-only design on purpose: it narrows the lists in place, by the
   words the rows show, and holds no state.
-- **Filter workspaces and agents** (`.sidebar-filter`, MachineSidebar.tsx) is its word, **Filter**
-  (`.sidebar-filter-label`, in `--text-dim` at the size of the field's text, in view whatever is typed), then one
-  `.input` the height of a row (`--side-row`, so a finger's `--touch-target` on a phone) in the rows'
-  gutter above the lists, its placeholder naming the scope (**Workspaces and agents**) and its
+- **Filter workspaces and agents** (`.sidebar-filter`, MachineSidebar.tsx) is one `.input` the height
+  of a row (`--side-row`, so a finger's `--touch-target` on a phone) in the rows' gutter above the
+  lists, with a `--text-dim` glass (`.sidebar-filter-glass`, `aria-hidden`) in its leading cell and no
+  word beside it, as VS Code's and macOS's search fields have none: its placeholder is its accessible
+  name, **Filter workspaces and agents**, so what a sighted reader and a screen reader are told is the
+  same, and its
   suggestions the names the rows show (a `<datalist>`, rebuilt from the roster, nothing typed kept),
   with its clear (`.sidebar-filter-clear`, the same square, inside the field's trailing
   cell) only while there is text; the browser's own search cancel glyph is off, so there is one. The
@@ -1203,18 +1205,25 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   footer, rather than clipping rows above an empty band. If both fit, Agents stays docked to the
   footer with the unused space above it. The flex column gives PCs free height first, up to
   their content, and Agents a half-shell basis; neither grows beyond its rows. Empty or folded
-  Agents gives its space back. PC and workspace folds never hide agent rows. The heading stays
-  outside its scroll area and still counts only when folded. The lower-edge fades are unchanged.
+  Agents gives its space back. PC and workspace folds never hide agent rows. Each head stays
+  outside its scroll area. A list fades at an edge only while rows lie past it, top or bottom
+  (`lib/useEdgeFades.ts` marks the edges, a `mask-image` fades them), so a list at its top fades its
+  foot alone, one scrolled to its end its head alone, and one that holds all its rows neither; the
+  mask fades whatever lies under it (a selected row, the pinned card) to the panel. Forced colors
+  draw no fade.
   In the drawer (`max-width: 768px`) Agents starts folded. Its fold stays on this device
   (`ovis:agents-collapsed`) and wins over that default on the next launch; a filter's fold does
   not persist. Until the PCs are in and each connected PC's panes have come, an empty list says
   **Loading agents…**, never "No agents running".
-- The resize line needs a fixed target to fold PCs to, so their roster gets a minimal **PCs**
-  heading with a caret, also for a lone Host. It folds only this section, not its Agents, and
-  keeps the fold on this device (`ovis:pcs-collapsed`); under a filter the fold is temporary.
-  Its rows stay mounted while hidden so their branch labels remain searchable. This heading
-  comes out of the PCs' allocation; it does not shrink Agents' default allocation. The per-PC
-  headers and actions, counts and filter field are unchanged.
+- The resize line needs a fixed target to fold PCs to, so their roster gets a **PCs** head, also
+  for a lone Host. It folds only this section, not its Agents, and keeps the fold on this device
+  (`ovis:pcs-collapsed`); under a filter the fold is temporary. Its rows stay mounted while hidden
+  so their branch labels remain searchable. This head comes out of the PCs' allocation; it does
+  not shrink Agents' default allocation. The **PCs** and **Agents** heads are drawn alike
+  (`.sidebar-section-label`): the fold's caret in the leading cell, always in view, open or
+  folded, so a head reads as a fold at rest; the dim words; and in the trailing cell how many PCs
+  this device shows or how many agents run, open or folded, as VS Code's view heads count theirs. The PCs count says its words (**2 PCs shown**) to a screen
+  reader and in its tooltip, never a bare number. The first PC starts right under the head.
 - Between the lists is a resize line (`SidebarSplit.tsx`, `role="separator"`): a `--border`
   hairline in its own hit area, `--border-strong` on hover, `--accent` while held or focused.
   A grip shows on hover and always under a finger. Dragging gives the upper section its chosen
@@ -1235,7 +1244,21 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   `aria-controls` follow that order. Each order keeps its own height: `ovis:sidebar-split` for
   PCs above, `ovis:sidebar-split-agents-first` for Agents above.
 - Each PC's header stays the head of its workspaces, and its own caret beside the `+` folds
-  those workspaces. The section's new caret folds the whole roster instead.
+  those workspaces; a pointer on its name folds them too, and the keyboard has the caret. The
+  section's caret folds the whole roster instead. A folded PC is one row, with no gap to the
+  next: a `--space-4` gap of its own made each about a row and a half (issue 2617). An open PC's
+  workspaces end with a `--space-2` gap before the next header. At rest a header's trailing cell
+  says how many agents run on that PC (`.machine-agent-count`, its words, **3 agents running**, for
+  a screen reader; no tooltip, as presses pass through it to the `+` and a hover hides it), and a
+  disconnected PC, whose snapshot is the last one seen, counts nothing; a pointer over the header
+  or the focus in it trades that count for its manage button, caret and `+`, as the Codex app shows
+  a row's actions on hover. The caret and the `+` keep their cells while unseen, so the name never
+  moves and a press lands on them. Only a fine pointer that hovers, with no touch screen beside it,
+  gets the trade: under a finger, on a hybrid laptop with a touch screen, or with no hover, the
+  actions always show (a disabled `+` dimmed as ever) and the count stays out of sight, still read by a
+  screen reader. A coarse primary pointer gets the existing finger-sized actions (`Machines.css`);
+  hybrid action visibility does not change that sizing rule. A connected PC's clipped state line keeps no padding, which
+  would lengthen the list's scroll.
 - When the sidebar shows one PC and it is the Host (the only PC, or the others hidden on this device), its group
   has no header: there is no other PC to tell it from, and the workspaces start the list, as the Claude app lists its
   sessions with no heading for the computer they run on. Nothing the header held is lost. The state words, the notice
@@ -1244,15 +1267,22 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   grid with the `+` in the folders' cell and its words in `--text-dim`, left out while a filter is on, while the PC is
   offline and while the empty box offers the same, and there while the PC's first roster loads; the group keeps the PC's name as its accessible name, and the
   filter neither searches nor suggests a name no row shows. The Claude and Codex apps put their New button at the top;
-  here it closes the list, so the workspaces come first. A Host has no manage panel, and Add PC is in Settings and the
-  palette. A lone PC that is not the Host keeps its header: its name says which PC this is, and its manage panel has
+  here it closes the list, so the workspaces come first. A Host has no Manage PC menu, and Add PC is in Settings and the
+  palette. A lone PC that is not the Host keeps its header: its name says which PC this is, and its Manage PC menu has
   no other place. No setting turns this off, since nothing is lost.
-- **Settings → Remote PCs → Show in sidebar** hides a PC on this device (`lib/hiddenMachines.ts`,
+- **Settings → Remote PCs → Show in sidebar**, and Manage PC's **Hide on this device**, hide a PC on this device (`lib/hiddenMachines.ts`,
   its own `ovis:hidden-pcs` key, like the fold): it leaves the PC groups, the Agents list and the
   command palette, stays connected, and a link or an alert to its pane still opens that pane. The
   list shows when there are two PCs or more, the Host first; the last PC shown cannot be hidden, and
-  hiding the PC the selection is on moves it to the Host, else the first PC shown. Under the PCs a
-  quiet `--fs-xs` `--text-dim` line says how many are hidden here and opens that group. The banner of
+  hiding the PC the selection is on moves it to the Host, else the first PC shown. The PCs head says
+  how many are hidden here, after its words: a quiet `--text-dim` pill (`.sidebar-hidden-pcs`), an eye
+  crossed out and the count, named in words (**1 PC hidden on this device**), a touch target on a phone.
+  It opens a menu, a sheet on a phone, headed **Hidden on this device** with a note that a hidden PC
+  stays connected, that shows each PC again in place (**Show Work PC**), in the roster's order, or goes
+  to that Settings group (**Choose PCs in Settings…**). Showing one follows the switch's rules and moves
+  no selection; showing the last takes the pill away, and the focus it held goes to the PCs head's fold,
+  not the page; so does the focus of an open menu whose last PC the roster or another tab takes away.
+  VS Code's view heads list the views hidden there to show again the same way. The banner of
   a PC that needs setup or a bridge update still shows for a hidden PC: it asks for an action. herdr's
   TUI shows one session at a time and Orca hides other clients' workspaces; Ovis shows every PC of
   the roster, so the choice is per PC and per device, not a sidebar switch.
@@ -1532,18 +1562,26 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   error, idle = disconnected), then the fold's caret (`.machine-toggle`, always shown; the name
   itself is not a control) and a `+` in the status column that starts a workspace on that
   PC (disabled while it is offline). An SSH PC's manage button sits before the
-  caret and shows on hover, focus, while its panel is open, while the PC is not connected, and always
+  caret and shows on hover, focus, while its menu is open, while the PC is not connected, and always
   on touch. Connected is the dot alone; every other state is also written under the name, with the server's
   error clamped to two lines and complete in the tooltip.
-- SSH PC management stays inline: its rename form and action buttons reflow within the sidebar
-  instead of floating over it. Rename shares the name field's row where both fit and goes under
-  the field in a narrow sidebar; the action buttons wrap into rows that share a height. A
-  one-line button is `--control-h` tall, as the field beside it (`--touch-target` on a coarse
-  pointer, where Rename keeps its own line under the field), and only a wrapped label grows its
-  button. Wrapping labels keep controls contained at narrow widths, with touch-sized buttons
-  on coarse pointers. This follows the
-  width-constrained responsive sidebar in [T3 Code](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/components/ui/sidebar.tsx)
-  but keeps herdr's existing inline panel instead of adopting its mobile sheet; no code is borrowed.
+- Manage PC opens a row menu (`RowMenu`): a popover under the button on a desktop, a bottom sheet on a phone, as a
+  workspace's and an agent's ⋯ do. Its head names the PC, with its state word and "over SSH" (a PC added through the relay:
+  "through the relay") under the name. The items
+  are **Rename…**, **Disconnect** (**Connect** while the PC is disabled), **Reconnect / setup**, **Update bridge…**,
+  **Hide on this device** and, after a rule, **Remove PC…** in the danger colour. Rename… swaps the name in the header
+  for a field (up to 100 characters, its text selected): Enter saves, and Escape or a click away keeps the old name;
+  Enter and Escape give the focus back to the manage button, and on a phone that Escape leaves the drawer out. Remove PC… asks in the dialog a workspace's Close asks
+  in (`ConfirmDialog`), which says only the registration goes and shows a failure in place. Hide on this device
+  follows Show in sidebar's rules: the last PC shown has no such item, and the focus goes to the line under the PCs
+  that says how many are hidden. A PC herdr manages keeps herdr's limits: no Rename…, Disconnect or Remove PC…, and
+  the head says to do those in herdr. A machine of herdr-core (`kind: "hc"`) offers only Hide on this device, and its
+  head says to add, rename or remove it with `hc machine` or in the Herdr app. A PC added through the relay has no Reconnect / setup or Update bridge…, and its
+  Remove PC… dialog says to revoke its access under Phone & devices on that PC too. Reconnect / setup is left out while the PC's own notice offers setup or
+  Connect, Update bridge… while it offers Connect, and both wait while the PC is disabled or has no address. Rename…,
+  Connect or Disconnect and Remove PC… wait while one of them runs. The inline panel this replaces pushed the
+  workspaces down, one button per line. Ovis's own `RowMenu` for workspace and agent rows is the precedent, and the
+  Codex and Claude apps put a row's actions in a menu, not an inline panel; no code is borrowed.
 - A repository's worktree workspaces (`workspace.worktree.is_linked_worktree`)
   sit indented under the row of the workspace on its main checkout (`.worktree-children`), without
   a tree hairline; a worktree whose repository workspace is not open stays at the top level.
@@ -1582,6 +1620,30 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   footer and scrolling when it outgrows the sidebar: per account its mark, name and plan pill with
   the email or login right-aligned and ellipsized, then one row per limit (label, reset time, right-aligned percent) over a 4px bar. A problem
   note is dim, red for an expired sign-in or a failed request.
+
+### PC load (`.machine-stats`)
+- Shown while Settings → Remote PCs → **PC load in the sidebar** is on, for this device only. Until
+  it is flipped it follows the roster: on while two or more PCs are connected, off for a lone PC,
+  whose load is not what tells PCs apart.
+- Under an expanded, connected PC's name and above its workspaces: one button holding three
+  meters in a row, each a label, the percent in `tabular-nums` and a 3px bar on a `--border-strong`
+  track (the plan meters' construction): **CPU**, **Memory** (without the file cache) and
+  **Disk** (the fullest of the disks that hold the root and home folder), and a caret at the end
+  that opens the numbers behind them: memory used and total, load average and core count, uptime
+  and a bar per disk. From 85% the percent and bar take `--status-blocked`, as the plan meters do
+  from 80%; amber stays chrome. The open or closed choice is kept per PC in this browser.
+- It is drawn only for a PC that can say: a PC whose bridge is from before `GET /api/system`
+  shows nothing, and so does one that has not answered yet. A figure the PC cannot measure
+  is a dash, never `0%`. The meters are drawn only; the button's label carries the numbers for a
+  screen reader ("Show system details for Work PC. CPU 4%, Memory 22%, Disk 50%").
+- Nothing is read for a PC that is folded, offline or in a hidden tab, nor while the sidebar, its
+  PCs list or a phone's drawer is closed. The next ask starts 5 s after the last one came back or
+  timed out, so a stuck PC never has more than one open, and a reading no ask has renewed for a
+  minute is dropped rather than shown as now. A herdr-core machine shows none: its server runs on
+  the PC that reaches it, which cannot read that machine's load.
+- Reference: no app listed in `src/AGENTS.md` shows a machine's load in its project list that I
+  know of (they assume one machine); this follows the app's own plan meters and PC group header,
+  and differs only in measuring a PC instead of a subscription. No code is borrowed.
 
 ### New workspace dialog
 - Agent select comes from `GET /api/agents`; shell-only is always available. The bridge offers the
@@ -3343,7 +3405,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   herdr's focus), **Alerts**, **Voice input**, **Agents**,
   **Shortcuts** (the platform-resolved global bindings), **Phone & devices** (Connect a phone,
   Keep screen on, Install; then Portal, where the server offers it; then paired devices; then Access),
-  **Remote PCs** (Add PC, Update PC bridges automatically; then **Show in sidebar**), **About** (Updates, herdr, the repository links). A button that points at
+  **Remote PCs** (Add PC, Update PC bridges automatically, PC load in the sidebar; then **Show in sidebar**), **About** (Updates, herdr, the repository links). A button that points at
   Updates opens the dialog on About.
 - Every page is built from the same parts (`components/SettingsControls.tsx`). A group is an
   optional caption (`--fs-sm`, `--fw-semibold`, `--text-dim`, sentence case) over one card:
@@ -4304,3 +4366,14 @@ Other hosts keep opening in a new tab, and unsafe schemes stay blocked; the app'
 limited to its own host. This follows T3 Code's in-thread visual replies and full-screen page view,
 while keeping external page links in the browser as its [HTML renders guide](https://github.com/pingdotgg/t3code/blob/main/docs/user/html-renders.md)
 does. No code or visual assets are copied.
+
+With **In the app** chosen, the command palette also opens such a page by its address: **Open a
+page on this PC…** starts the query as `localhost:`, and a query that is a loopback name with a
+port (`localhost:8448`, `:8448`, `127.0.0.1:3000/docs`) leads the list with **Open** that
+address, so a local tool with a web UI (a Git client, a docs site) sits beside the pane without a
+link printed in a terminal. Without a scheme the address takes the app's own, since an https app
+frames only https pages (a port `tailscale serve` fronts). The page is the PC's that serves the
+app whichever PC is selected, and it goes through the same `panelUrl` checks: the app's own port
+and pages the panel refuses get no row. Nothing is proxied: the browser reaches the page under the
+app's hostname, as for a clicked link. This follows VS Code's Simple Browser, which a palette
+command opens on a typed address; no code is copied.
