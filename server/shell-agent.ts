@@ -277,7 +277,7 @@ const servicePathOnly = new ShellAgentLocator({ probe: null });
 
 const quote = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`;
 /** cmd.exe has no escape for a quote inside quotes, and expands %NAME%. */
-function cmdQuote(word: string): string {
+export function cmdQuote(word: string): string {
   if (/["%\r\n]/.test(word)) throw new Error("this argument cannot be typed into cmd.exe");
   // a backslash right before the closing quote would escape it for the program's own parser
   return `"${word.replace(/\\+$/, (run) => run + run)}"`;
@@ -297,6 +297,37 @@ export function shellCommandLine(shell: PaneShell, executable: string, args: rea
   if (shell === "powershell") return ["&", psQuote(executable), ...args.map(psQuote)].join(" ");
   if (shell === "cmd") return [executable, ...args].map(cmdQuote).join(" ");
   return [executable, ...args].map(quote).join(" ");
+}
+
+/** What .NET takes for whitespace (Char.IsWhiteSpace): Windows PowerShell 5.1 quotes a native argument that holds any after an even number of `"`. */
+const DOTNET_WHITESPACE = /[\t-\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/u;
+
+/**
+ * `args` as a PowerShell line must give them for the native program it starts to read them back
+ * unchanged. Windows PowerShell 5.1 (`powershell`) passes each as it is, in double quotes when it
+ * holds whitespace after an even number of `"` (each one counts, an escaped one too), and drops an
+ * empty one: an empty one goes as `""`, a quote as `\"` after its backslashes are doubled, and the
+ * backslashes ending one with whitespace are doubled before the quote 5.1 closes it with
+ * (live-verified, 5.1.26100 to node.exe). One whose whitespace all follows an odd number of `"`
+ * (`"fix the bug"`, `x="a b"`) would go unquoted, split at its spaces: it throws. PowerShell 7 (`pwsh`)
+ * escapes them itself from 7.3 and passes them as 5.1 does before that: they go as they are, and
+ * one the two would pass differently throws.
+ */
+export function powershellNativeArgs(program: "powershell" | "pwsh", args: readonly string[]): string[] {
+  return args.map((arg) => {
+    const spaced = DOTNET_WHITESPACE.test(arg);
+    if (program === "pwsh") {
+      if (arg === "" || arg.includes('"') || (spaced && arg.endsWith("\\"))) throw new Error("PowerShell 7 may not pass this argument unchanged");
+      return arg;
+    }
+    if (arg === "") return '""';
+    const escaped = arg.replace(/(\\*)"/g, (_, run: string) => `${run}${run}\\"`);
+    if (!spaced) return escaped;
+    const encoded = escaped.replace(/\\+$/, (run) => run + run);
+    // a part between its quotes follows as many of them as its index: 5.1 quotes the argument for whitespace in an even one
+    if (!encoded.split('"').some((part, index) => index % 2 === 0 && DOTNET_WHITESPACE.test(part))) throw new Error("Windows PowerShell 5.1 would split this argument");
+    return encoded;
+  });
 }
 
 interface ProcessInfo { process_info?: { shell_pid?: number; foreground_processes?: { pid: number; argv?: string[]; cwd?: string }[] } }
