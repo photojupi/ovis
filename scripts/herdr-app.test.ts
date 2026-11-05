@@ -17,8 +17,8 @@ async function powershell(args: string[], env: Record<string, string | undefined
   return { out: out.trim(), err, code };
 }
 /** `commands` after dot-sourcing the launcher, which then defines its functions and runs nothing. */
-const withFunctions = (commands: string) =>
-  powershell(["-EncodedCommand", Buffer.from(`. ${quoted(launcher)}; ${commands}`, "utf16le").toString("base64")]);
+const withFunctions = (commands: string, env: Record<string, string | undefined> = {}) =>
+  powershell(["-EncodedCommand", Buffer.from(`. ${quoted(launcher)}; ${commands}`, "utf16le").toString("base64")], env);
 
 /** A pipe server that counts the connections made to it. */
 async function pipe(name: string): Promise<{ server: Server; connections: () => number }> {
@@ -71,6 +71,46 @@ it.skipIf(!windows)("finds the core's pipe in the pipe list without connecting t
     expect(core.connections()).toBe(0);
   } finally { await close(odd.server); }
 }, 30_000);
+
+it.skipIf(!windows)("reads the server's log from the folder scripts/plugin.ts finds, herdr's plugin folder and older names too", async () => {
+  // by its long name: the launcher's answer is compared with paths under it
+  const scratch = realpathSync.native(mkdtempSync(join(tmpdir(), "ovis herdr app state ")));
+  const own = join("profile", ".local", "state", "ovis");
+  const ownOld = join("profile", ".local", "state", "herdr-web-ui");
+  const managed = join("local", "herdr", "plugins", "devswha.ovis");
+  const managedOld = join("local", "herdr", "plugins", "devswha.herdr-web-ui");
+  const xdg = join("xdg", "herdr", "plugins", "devswha.ovis");
+  // a folder holding a record of a running server (this test), of one that is gone, or just there;
+  // `status` names the pid of the record it read, so it says which folder scripts/plugin.ts took
+  const cases: { running: string; gone?: string[]; there?: string[]; env?: (root: string) => Record<string, string> }[] = [
+    { running: own },
+    { running: own, there: [managed] },
+    { running: managed, gone: [own] },
+    { running: ownOld },
+    { running: managedOld },
+    { running: managedOld, there: [managed] },
+    { running: "given", there: [managed], env: (root) => ({ HERDR_PLUGIN_STATE_DIR: join(root, "given") }) },
+    { running: xdg, there: [managed], env: (root) => ({ XDG_STATE_HOME: join(root, "xdg") }) },
+  ];
+  try {
+    await Promise.all(cases.map(async ({ running, gone = [], there = [], env }, index) => {
+      const root = join(scratch, String(index));
+      for (const dir of [running, ...gone, ...there]) mkdirSync(join(root, dir), { recursive: true });
+      writeFileSync(join(root, running, "server.pid"), `${process.pid}\n`);
+      for (const dir of gone) writeFileSync(join(root, dir, "server.pid"), "2147483647\n");
+      const environment = {
+        USERPROFILE: join(root, "profile"), LOCALAPPDATA: join(root, "local"), HOME: undefined, XDG_STATE_HOME: undefined, HERDR_PLUGIN_STATE_DIR: undefined,
+        HERDR_PLUGIN_CONFIG_DIR: join(root, "config"), OVIS_STATE_DIR: join(root, "app-state"), PORT: "1", ...env?.(root),
+      };
+      const status = Bun.spawnSync([process.execPath, join(import.meta.dir, "plugin.ts"), "status"], { cwd: scratch, env: { ...process.env, ...environment }, windowsHide: true, stdout: "pipe", stderr: "pipe" });
+      expect(status.stdout.toString(), `case ${index}: ${status.stderr.toString()}`).toContain(`(pid ${process.pid})`);
+      const { out, err } = await withFunctions("Get-ServerLog", environment);
+      expect(out, `case ${index}: ${err}`).toBe(join(root, running, "server.log"));
+    }));
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}, 60_000);
 
 it.skipIf(!windows)("installs and builds a fresh checkout once, starts scripts/plugin.ts out of sight without the terminal's identity, then shows its status, or the log's end when a failed start wrote it", async () => {
   // by its long name, which PowerShell gives the launcher's folder even when TEMP is a short 8.3 one

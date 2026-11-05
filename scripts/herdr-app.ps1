@@ -19,9 +19,6 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $self = $PSCommandPath
 $plugin = Join-Path $PSScriptRoot 'plugin.ts'
-# where scripts/plugin.ts keeps the server's log when herdr does not hand it a state dir
-$stateDir = if ($env:HERDR_PLUGIN_STATE_DIR) { $env:HERDR_PLUGIN_STATE_DIR } else { Join-Path $env:USERPROFILE '.local\state\ovis' }
-$log = Join-Path $stateDir 'server.log'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 # not 'Ovis', the value of Ovis for Windows (app/windows), which runs the herdr TUI's plugin
 $runName = 'Ovis (Herdr app)'
@@ -160,6 +157,40 @@ function Invoke-Detached([string]$Arguments) {
     [Ovis.HerdrApp]::Run($bunExe, $Arguments, $root, $false)
 }
 
+# Whether the server.pid in this folder names a running process, as scripts/plugin.ts reads it.
+function Test-ServerRecorded([string]$Dir) {
+    $file = [IO.Path]::Combine($Dir, 'server.pid')
+    if (-not (Test-Path -LiteralPath $file)) { return $false }
+    $recorded = 0
+    [int]::TryParse("$(Get-Content -Raw -LiteralPath $file)".Trim(), [ref]$recorded) -and $recorded -gt 0 -and
+        [bool](Get-Process -Id $recorded -ErrorAction SilentlyContinue)
+}
+
+# The server's log, in the folder scripts/plugin.ts finds for it (REQUESTED_STATE_DIR and
+# runningStateDir there): HERDR_PLUGIN_STATE_DIR; else ~/.local/state/ovis while a server recorded
+# there runs or herdr keeps no state folder for the plugin; else that folder of herdr's. Each goes
+# by its name from before the rename while only that one is there, and herdr's while a server
+# recorded under it runs. The record decides, so a stop changes the answer: ask after it.
+function Get-ServerLog {
+    $dir = $env:HERDR_PLUGIN_STATE_DIR
+    if (-not $dir) {
+        $dir = [IO.Path]::Combine($env:USERPROFILE, '.local\state\ovis')
+        $old = [IO.Path]::Combine($env:USERPROFILE, '.local\state\herdr-web-ui')
+        if ((Test-Path -LiteralPath $old) -and -not (Test-Path -LiteralPath $dir)) { $dir = $old }
+        $herdr = if ($null -ne $env:XDG_STATE_HOME) { [IO.Path]::Combine($env:XDG_STATE_HOME, 'herdr') }
+            elseif ($env:LOCALAPPDATA) { [IO.Path]::Combine($env:LOCALAPPDATA, 'herdr') }
+            else { [IO.Path]::Combine($env:USERPROFILE, 'AppData\Local\herdr') }
+        $managed = 'devswha.ovis', 'devswha.herdr-web-ui' | ForEach-Object { [IO.Path]::Combine($herdr, 'plugins', $_) } |
+            Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        if ($managed -and -not (Test-ServerRecorded $dir)) { $dir = $managed }
+    }
+    if ((Split-Path -Leaf $dir) -ceq 'devswha.ovis' -and -not (Test-ServerRecorded $dir)) {
+        $old = [IO.Path]::Combine((Split-Path -Parent $dir), 'devswha.herdr-web-ui')
+        if (Test-ServerRecorded $old) { $dir = $old }
+    }
+    [IO.Path]::Combine($dir, 'server.log')
+}
+
 # The length of the server's log, or -1 while there is none.
 function Get-LogLength { if (Test-Path -LiteralPath $log) { (Get-Item -LiteralPath $log).Length } else { -1 } }
 
@@ -186,6 +217,7 @@ function Start-Ovis {
     if (-not (Wait-Core $pipe $seconds)) {
         throw "The Herdr app's core (\\.\pipe\$pipe) did not start within 60 seconds. Open the Herdr app, then run this again."
     }
+    $log = Get-ServerLog
     $logged = Get-LogLength
     $code = Invoke-Detached ('"{0}" start' -f $plugin)
     if ($code -ne 0) {
@@ -228,6 +260,7 @@ $env:OVIS_RUNTIME = 'herdr-core'
 
 switch ($Command) {
     'logs' {
+        $log = Get-ServerLog
         if (-not (Test-Path -LiteralPath $log)) { "Ovis has no log yet at $log"; exit 0 }
         Get-Content -LiteralPath $log -Tail 40 -Wait:$Follow
         exit 0
