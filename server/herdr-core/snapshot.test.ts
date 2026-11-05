@@ -101,6 +101,8 @@ describe("buildSnapshot", () => {
   it("leaves a drive root as written, so it still reads as a place", () => {
     expect(named("C:\\")).toBe("C:\\");
     expect(named("C:/")).toBe("C:/");
+    expect(named("\\\\?\\C:\\")).toBe("\\\\?\\C:\\");
+    expect(named("\\\\?\\C:\\repos\\ovis-app")).toBe("ovis-app");
   });
 
   it("leaves out finished terminals and tabs left with none, and gives a terminal no tab holds a tab of its own", () => {

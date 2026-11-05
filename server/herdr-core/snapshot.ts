@@ -191,7 +191,7 @@ function appTree(node: unknown, take: (address: string) => HcTerminal | null, he
  * as the client's `folderName` keeps it, so it still reads as a place.
  */
 function basename(path: string): string {
-  if (/^[A-Za-z]:[\\/]+$/.test(path)) return path;
+  if (/^(?:\\\\[?.]\\)?[A-Za-z]:[\\/]+$/.test(path)) return path;
   const parts = path.split(/^(?:[A-Za-z]:[\\/]|\\\\)/.test(path) ? /[\\/]/ : "/").filter(Boolean);
   return parts[parts.length - 1] ?? path;
 }
