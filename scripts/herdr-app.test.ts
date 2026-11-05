@@ -3,6 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSyn
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { coreSocket } from "../server/herdr-core/discovery.ts";
 
 const launcher = join(import.meta.dir, "herdr-app.ps1");
 const windows = process.platform === "win32";
@@ -43,6 +44,10 @@ it.skipIf(!windows)("names the Herdr app's core pipe as hc does", async () => {
     "$env:HC_SOCKET = '\\\\.\\pipe\\mine.sock'; Get-CorePipe",
   ].join("; "));
   expect(out.split(/\r?\n/), err).toEqual(["herdr-core-JPi2-default.sock", "herdr-core-jupi-work.sock", "mine.sock"]);
+  // and as the server does, which refuses to connect while that pipe is not listed
+  const asServer = (env: Record<string, string>) => coreSocket({ env, home: join(tmpdir(), "ovis-no-such-home"), platform: "win32", pipes: () => [] }).path;
+  expect([asServer({ USERNAME: "Jü Pi.2" }), asServer({ USERNAME: "jupi", HC_SESSION: " work " }), asServer({ HC_SOCKET: "\\\\.\\pipe\\mine.sock" })])
+    .toEqual(["\\\\.\\pipe\\herdr-core-JPi2-default.sock", "\\\\.\\pipe\\herdr-core-jupi-work.sock", "\\\\.\\pipe\\mine.sock"]);
 }, 30_000);
 
 it.skipIf(!windows)("finds the bun.exe behind an npm .cmd shim in a path with literal percent signs", async () => {

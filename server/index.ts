@@ -570,8 +570,10 @@ if (import.meta.main) {
   console.log(`Ovis listening on http://${instance.hostname}:${instance.port}`);
   const socket = herdrSocketPath();
   void ping(socket).catch(() => {
+    // on Windows the Herdr app runs the core: `hc server start` would start one outside it
+    // (server/herdr-core/runtime.ts)
     console.error(herdrCore
-      ? `herdr-core is not reachable through ${socket}: start it with \`${hcBin()} server start\`, or set OVIS_HC_BIN to hc's full path.`
+      ? `herdr-core is not reachable through ${socket}: ${process.platform === "win32" ? "open the Herdr app" : `start it with \`${hcBin()} server start\``}, or set OVIS_HC_BIN to hc's full path.`
       : `herdr is not reachable at ${socket}: start herdr, or set HERDR_SOCKET to its socket (named sessions: ~/.config/herdr/sessions/<name>/herdr.sock).`);
   });
   // the state folder is created on first write, so test the nearest folder that exists

@@ -3,8 +3,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlin
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findHc } from "./discovery.ts";
-import { HC_MOVED, hcBin, hcRecovery, startRuntime } from "./runtime.ts";
-import { socketAddress } from "../herdr/client.ts";
+import { coreConnection, HC_MOVED, hcBin, hcRecovery, NO_CORE_STATE, startRuntime } from "./runtime.ts";
+import { herdrRpc, socketAddress } from "../herdr/client.ts";
 
 /** an hc stand-in found, so no test looks at the developer's own PATH, shell or hc */
 const standIn = async () => ({ bin: "/nonexistent/hc", version: "0.1.17" });
@@ -14,6 +14,9 @@ const previousRuntime = process.env["OVIS_RUNTIME"];
 const previousSocket = process.env["HERDR_SOCKET"];
 const previousPath = process.env["PATH"];
 const previousHcBin = process.env["OVIS_HC_BIN"];
+const previousHcSocket = process.env["HC_SOCKET"];
+const previousHcEnv = process.env["OVIS_HC_ENV"];
+const previousStateHome = process.env["XDG_STATE_HOME"];
 let cleanup = () => {};
 afterEach(() => {
   cleanup();
@@ -27,6 +30,14 @@ afterEach(() => {
   process.env["PATH"] = previousPath;
   if (previousHcBin === undefined) delete process.env["OVIS_HC_BIN"];
   else process.env["OVIS_HC_BIN"] = previousHcBin;
+  if (previousHcSocket === undefined) delete process.env["HC_SOCKET"];
+  else process.env["HC_SOCKET"] = previousHcSocket;
+  if (previousHcEnv === undefined) delete process.env["OVIS_HC_ENV"];
+  else process.env["OVIS_HC_ENV"] = previousHcEnv;
+  // on Windows any spelling names the one variable; elsewhere a test sets only the upper-case one
+  delete process.env["xdg_state_home"];
+  if (previousStateHome === undefined) delete process.env["XDG_STATE_HOME"];
+  else process.env["XDG_STATE_HOME"] = previousStateHome;
 });
 
 it.skipIf(platform === "win32")("runs the hc it found, not an unrelated one named first", async () => {
@@ -175,6 +186,107 @@ it.skipIf(platform !== "win32")("serves herdr-core on Windows through a named pi
   const again = await startRuntime(join(dir, "state"), standIn);
   if (!again) throw new Error("runtime did not start again");
   again.stop();
+});
+
+/** nothing runs: `hc connect` starts a core where none listens */
+const noProcesses = () => spyOn(Bun, "spawn").mockImplementation(() => { throw new Error("not run in tests"); });
+/** no line and no hc found from a test before this one: a start that was refused keeps them, and only a stop lets go */
+const freshRuntime = async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ovis-hc-fresh-"));
+  process.env["OVIS_RUNTIME"] = "herdr-core";
+  try { (await startRuntime(dir, standIn))?.stop(); } finally { rmSync(dir, { recursive: true, force: true }); }
+};
+
+it("connects to no core on Windows unless its pipe is listed, and starts none", async () => {
+  const spawn = noProcesses();
+  Object.defineProperty(process, "platform", { value: "win32" });
+  process.env["HC_SOCKET"] = `\\\\.\\pipe\\ovis-test-no-core-${process.pid}.sock`;
+  const hc = coreConnection();
+  cleanup = () => hc.close();
+  // hello fails as a call does, and the next try is refused the same way
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await expect(hc.hello()).rejects.toMatchObject({ kind: "closed", message: expect.stringContaining("open the Herdr app (Ovis starts no core on Windows)") });
+    await expect(hc.call("terminal.list", {})).rejects.toMatchObject({ kind: "closed" });
+  }
+  expect(spawn).not.toHaveBeenCalled();
+});
+
+it.skipIf(platform !== "win32")("answers as a herdr nobody can reach, and goes on serving, while the core's pipe is not listed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ovis-hc-windows-"));
+  cleanup = () => rmSync(dir, { recursive: true, force: true });
+  const spawn = noProcesses();
+  process.env["OVIS_RUNTIME"] = "herdr-core";
+  process.env["HC_SOCKET"] = `\\\\.\\pipe\\ovis-test-no-core-${process.pid}.sock`;
+  const adapter = await startRuntime(join(dir, "state"), standIn);
+  if (!adapter) throw new Error("runtime did not start");
+  try {
+    // ping asks hc's hello first: refused, it ends one answer, not this process
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(herdrRpc("ping", {}, adapter.socketPath)).rejects.toMatchObject({ code: "connect_failed", message: expect.stringContaining("open the Herdr app") });
+    }
+  } finally {
+    adapter.stop();
+  }
+  expect(spawn).not.toHaveBeenCalled();
+});
+
+it.skipIf(platform !== "win32")("connects on Windows once the core's pipe is listed, through an hc that can start no core", async () => {
+  await freshRuntime();
+  const spawn = noProcesses();
+  const pipe = `\\\\.\\pipe\\ovis-test-core-${process.pid}.sock`;
+  process.env["HC_SOCKET"] = pipe;
+  // the server's own state folder, in a spelling of its name other than hc's: Windows keeps a
+  // variable under the spelling it was first set with, so one set before is cleared first
+  delete process.env["XDG_STATE_HOME"];
+  process.env["xdg_state_home"] = join(tmpdir(), "ovis-test-state-home");
+  const core = Bun.listen({ unix: pipe, socket: { data() {} } });
+  const hc = coreConnection();
+  cleanup = () => { hc.close(); core.stop(true); };
+  await expect(hc.hello()).rejects.toMatchObject({ kind: "closed", message: expect.stringContaining("hc could not be started") });
+  expect(spawn).toHaveBeenCalledTimes(1);
+  expect(spawn.mock.calls[0]![0]).toEqual([hcBin(), "connect"]);
+  expect(spawn.mock.calls[0]![1]).toMatchObject({ windowsHide: true });
+  // the server's environment as it is now (hc looks for the pipe that was listed), with a state
+  // folder Windows cannot make in place of the server's: hc makes it before it starts a core
+  const { XDG_STATE_HOME: state, ...rest } = spawn.mock.calls[0]![1]?.env ?? {};
+  expect(state).toBe(NO_CORE_STATE);
+  expect(rest).toEqual(Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toUpperCase() !== "XDG_STATE_HOME")));
+  expect(rest["HC_SOCKET"]).toBe(pipe);
+  expect(() => mkdirSync(join(NO_CORE_STATE, "herdr-core", "x"), { recursive: true })).toThrow();
+});
+
+it.skipIf(platform !== "win32")("looks on Windows at the core a machine's server reaches (OVIS_HC_ENV), not at its own environment's", async () => {
+  await freshRuntime();
+  const spawn = noProcesses();
+  const listed = `\\\\.\\pipe\\ovis-test-core-machine-${process.pid}.sock`;
+  const unlisted = `\\\\.\\pipe\\ovis-test-no-core-machine-${process.pid}.sock`;
+  const core = Bun.listen({ unix: listed, socket: { data() {} } });
+  const hc = coreConnection();
+  cleanup = () => { hc.close(); core.stop(true); };
+  process.env["HC_SOCKET"] = listed;
+  process.env["OVIS_HC_ENV"] = JSON.stringify({ HC_SOCKET: unlisted });
+  await expect(hc.hello()).rejects.toMatchObject({ kind: "closed", message: expect.stringContaining("open the Herdr app") });
+  expect(spawn).not.toHaveBeenCalled();
+  process.env["HC_SOCKET"] = unlisted;
+  process.env["OVIS_HC_ENV"] = JSON.stringify({ HC_SOCKET: listed, XDG_STATE_HOME: join(tmpdir(), "ovis-test-state-home") });
+  await expect(hc.hello()).rejects.toMatchObject({ kind: "closed", message: expect.stringContaining("hc could not be started") });
+  expect(spawn).toHaveBeenCalledTimes(1);
+  expect(spawn.mock.calls[0]![1]?.env).toMatchObject({ HC_SOCKET: listed, XDG_STATE_HOME: NO_CORE_STATE });
+});
+
+it("spawns hc connect off Windows with no environment of its own but a machine's, as before", async () => {
+  await freshRuntime();
+  const spawn = noProcesses();
+  Object.defineProperty(process, "platform", { value: "linux" });
+  const hc = coreConnection();
+  cleanup = () => hc.close();
+  await expect(hc.hello()).rejects.toMatchObject({ kind: "closed", message: expect.stringContaining("hc could not be started") });
+  expect(spawn).toHaveBeenCalledTimes(1);
+  expect(spawn.mock.calls[0]![1]).not.toHaveProperty("env");
+  process.env["OVIS_HC_ENV"] = JSON.stringify({ HC_SESSION: "work", XDG_STATE_HOME: "/state" });
+  await expect(hc.hello()).rejects.toMatchObject({ kind: "closed", message: expect.stringContaining("hc could not be started") });
+  expect(spawn).toHaveBeenCalledTimes(2);
+  expect(spawn.mock.calls[1]![1]?.env).toEqual({ ...process.env, HC_SESSION: "work", XDG_STATE_HOME: "/state" });
 });
 
 it("leaves the default runtime's state and socket unchanged even on Windows", async () => {

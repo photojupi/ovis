@@ -5,14 +5,15 @@
  * Every hc command but `--version` starts a core when none runs (`hc connect` and
  * `hc server status` included), which would leave a core and its systemd unit on a PC that only
  * uses herdr's TUI. So a candidate is only ever asked `--version`, and the core counts as running
- * when its socket file is there: nothing connects to it.
+ * when its socket file is there, or on Windows its named pipe is listed: nothing connects to it.
  */
-import { statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import type { HerdrCoreFacts } from "../../shared/machines.ts";
 import { readHerdrConfig } from "../herdr-sidebar.ts";
 import { loginPathProbe, loginShell } from "../shell-agent.ts";
 import { userHome } from "../user-home.ts";
+import { isNamedPipe, PIPE_PREFIX } from "./pipe.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -165,18 +166,21 @@ export interface CoreSocketOptions {
   platform?: NodeJS.Platform;
   /** `/run/user/<uid>` when that folder exists, else null: hc's runtime dir without XDG_RUNTIME_DIR */
   userRuntimeDir?: string | null;
+  /** the names under `\\.\pipe\` (Windows); the default lists them, which opens none of them */
+  pipes?: () => readonly string[];
 }
 
 export interface CoreSocket {
   session: string;
   path: string;
-  /** the socket file is there; it is never connected to, so a core that died may leave one */
+  /** the socket file is there, or on Windows the named pipe is listed; it is never connected to, so a core that died may leave a file */
   running: boolean;
 }
 
 /**
  * Where the core of this environment listens, as hc works it out (herdr-core paths.rs): HC_SOCKET,
- * else `socket` in its config.toml, else `<session>.sock` in herdr-core under the runtime dir
+ * else `socket` in its config.toml (under XDG_CONFIG_HOME, else ~/.config, or %APPDATA% on
+ * Windows), else `<session>.sock` in herdr-core under the runtime dir
  * (XDG_RUNTIME_DIR, else /run/user/<uid>), else beside the state in
  * `$XDG_STATE_HOME/herdr-core/<session>/` (macOS). The session is HC_SESSION, else `default`.
  */
@@ -185,10 +189,12 @@ export function coreSocket(options: CoreSocketOptions = {}): CoreSocket {
   const platform = options.platform ?? process.platform;
   const home = options.home ?? userHome(env, platform);
   const session = env["HC_SESSION"]?.trim() || "default";
-  const config = join(env["XDG_CONFIG_HOME"] || join(home, ".config"), "herdr-core", "config.toml");
+  const configHome = env["XDG_CONFIG_HOME"] || (platform === "win32" ? env["APPDATA"] || join(home, "AppData", "Roaming") : join(home, ".config"));
+  const config = join(configHome, "herdr-core", "config.toml");
   const state = join(env["XDG_STATE_HOME"] || join(home, ".local", "state"), "herdr-core", session);
   const path = env["HC_SOCKET"] || configuredSocket(config) || defaultSocket();
-  return { session, path, running: exists(path) };
+  // a stat of a live pipe opens it (a connection the core sees, on every health request): Windows lists it by name instead
+  return { session, path, running: platform === "win32" && isNamedPipe(path) ? listed(path, options.pipes ?? (() => readdirSync(PIPE_PREFIX))) : exists(path) };
 
   function defaultSocket(): string {
     if (platform === "win32") return `\\\\.\\pipe\\herdr-core-${(env["USERNAME"] ?? "").replace(/[^A-Za-z0-9]/g, "")}-${session}.sock`;
@@ -214,9 +220,15 @@ function configuredSocket(config: string): string | null {
   return typeof socket === "string" && socket !== "" ? socket : null;
 }
 
-/** hc's Windows pipe answers a stat with EBUSY while each of its instances is taken (live-seen with a core running): it is there */
+/** hc's Windows pipe, when not named `\\.\pipe\…`, answers a stat with EBUSY while each of its instances is taken (live-seen with a core running): it is there */
 function exists(path: string): boolean {
   try { statSync(path); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === "EBUSY"; }
+}
+
+/** a pipe's name among `pipes`, as Windows compares them: without case; a list that cannot be read shows none */
+function listed(path: string, pipes: () => readonly string[]): boolean {
+  const name = path.slice(PIPE_PREFIX.length).toLowerCase();
+  try { return pipes().some((pipe) => pipe.toLowerCase() === name); } catch { return false; }
 }
 
 /** how long one look for hc stands: it runs a login shell and each candidate's --version */

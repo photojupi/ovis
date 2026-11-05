@@ -159,7 +159,7 @@ export function spawnHcConnect(bin: string, env?: Record<string, string | undefi
   if (bin === "/dev/null/herdr-core-moved") throw new HcError("closed", "herdr-core moved (an update?), and Ovis is looking for it again: try again in a moment");
   let child: Bun.Subprocess<"pipe", "pipe", "ignore">;
   try {
-    child = Bun.spawn([bin, "connect"], { stdin: "pipe", stdout: "pipe", stderr: "ignore", ...(env ? { env } : {}) });
+    child = Bun.spawn([bin, "connect"], { stdin: "pipe", stdout: "pipe", stderr: "ignore", windowsHide: true, ...(env ? { env } : {}) });
   } catch (error) {
     throw new HcError("closed", `hc could not be started (${bin}): ${error instanceof Error ? error.message : String(error)}`);
   }

@@ -1,6 +1,6 @@
 import { chmodSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { startHerdrCoreAdapter, type HerdrCoreAdapter } from "./adapter.ts";
-import { HcConnection, spawnHcConnect } from "./connection.ts";
+import { HcConnection, HcError, spawnHcConnect, type HcTransport } from "./connection.ts";
 import { MachineScopedConnection } from "./machine-scope.ts";
 import { SeenMarker } from "./seen-label.ts";
 import { existsSync } from "node:fs";
@@ -118,9 +118,36 @@ export function coreSeenMarker(): SeenMarker {
   return marker;
 }
 
+/**
+ * XDG_STATE_HOME for `hc connect` on Windows: a folder no Windows path can name (`|`). hc makes
+ * its state folder only to start a core, once its connect failed (herdr-core client.rs
+ * `spawn_detached`), and never names its pipe after it (platform/windows.rs `endpoints`): the
+ * connect is as before, and a failed one starts nothing.
+ */
+export const NO_CORE_STATE = "C:\\ovis-starts-no-core|";
+
+/**
+ * `hc connect` on Windows, kept from starting a core: on its own it starts one whenever its connect
+ * fails for any reason but access denied (herdr-core client.rs `connect_starting`). That core would
+ * hand the server's whole environment to every terminal it starts and sit in the server's process
+ * tree (scripts/plugin.ts stop ends it with taskkill /t, terminals and all), and an elevated
+ * server's would be out of the Herdr app's reach. So no `hc connect` runs while the core's pipe is
+ * not listed (the Herdr app is closed), and the one that runs cannot start a core (NO_CORE_STATE)
+ * should the core go between the look and the connect (the app quitting as the line closes) or its
+ * pipe stay busy. Both go by hcEnv: a machine's server looks at the core its `hc connect` reaches.
+ */
+function connectToRunningCore(): HcTransport {
+  const env = hcEnv() ?? process.env;
+  if (!coreSocket({ env }).running) throw new HcError("closed", "the Herdr app's core is not running: open the Herdr app (Ovis starts no core on Windows)");
+  // Windows takes a variable's name in any case: a spelling of the server's own left beside it
+  // would go to hc too, and which one hc reads is down to how the block is sorted
+  const inherited = Object.entries(env).filter(([name]) => name.toUpperCase() !== "XDG_STATE_HOME");
+  return spawnHcConnect(hcBin(), { ...Object.fromEntries(inherited), XDG_STATE_HOME: NO_CORE_STATE });
+}
+
 /** The server's one line to hc, which the adapter answers through and live terminals stream on. */
 export function coreConnection(): HcConnection {
-  const spawn = () => spawnHcConnect(hcBin(), hcEnv());
+  const spawn = () => process.platform === "win32" ? connectToRunningCore() : spawnHcConnect(hcBin(), hcEnv());
   const machine = hcMachine();
   connection ??= machine === null ? new HcConnection(spawn) : new MachineScopedConnection(spawn, machine.name, machine.id);
   return connection;

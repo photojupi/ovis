@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 import { join, win32 } from "node:path";
 
-const PIPE_PREFIX = "\\\\.\\pipe\\";
+export const PIPE_PREFIX = "\\\\.\\pipe\\";
 
 export function adapterAddress(stateDir: string, platform: NodeJS.Platform = process.platform): string {
   if (platform !== "win32") return join(stateDir, "herdr-core.sock");

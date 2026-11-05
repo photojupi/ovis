@@ -210,8 +210,9 @@ function Start-Ovis {
         Invoke-Bun @('run', 'build')
         if ($LASTEXITCODE -ne 0) { throw "bun run build failed (exit $LASTEXITCODE)." }
     }
-    # Without a core, Ovis's hc would start one of its own, which takes Ovis's environment and is
-    # stopped with Ovis. So it waits for the app's, only reading the pipe list: nothing connects.
+    # Without a core Ovis does not come up: on Windows it starts none of its own (a core it started
+    # would take Ovis's environment and stop with Ovis). So it waits for the app's, only reading the
+    # pipe list: nothing connects.
     $pipe = Get-CorePipe
     $seconds = if ($WaitCore) { -1 } else { 60 }
     if (-not (Wait-Core $pipe $seconds)) {

@@ -38,6 +38,9 @@ function runs(log: string): string[] {
   try { return readFileSync(log, "utf8").split("\n").filter((line) => line !== ""); } catch { return []; }
 }
 
+/** a path inside a TOML basic string: Windows' backslashes escaped, or TOML reads them as escapes */
+const toml = (path: string) => path.replaceAll("\\", "\\\\");
+
 it.skipIf(!unix)("looks where the Herdr app does: OVIS_HC_BIN, the PATH, the login shell's PATH, then the usual places", async () => {
   const { root, log } = scratch();
   const named = fake(join(root, "named"), "my-hc", "hc 0.1.20", log);
@@ -101,11 +104,62 @@ it("finds the core's socket the way hc does, and calls it running only when the 
   // `socket` in hc's config, then HC_SOCKET, win over the runtime dir
   const config = join(root, "config");
   mkdirSync(join(config, "herdr-core"), { recursive: true });
-  writeFileSync(join(config, "herdr-core", "config.toml"), `# hc\nsocket = "${join(root, "configured.sock")}"\n`);
+  writeFileSync(join(config, "herdr-core", "config.toml"), `# hc\nsocket = "${toml(join(root, "configured.sock"))}"\n`);
   expect(coreSocket({ ...base, env: { XDG_CONFIG_HOME: config, XDG_RUNTIME_DIR: run } }).path).toBe(join(root, "configured.sock"));
   const chosen = join(root, "chosen.sock");
   writeFileSync(chosen, "");
   expect(coreSocket({ ...base, env: { HC_SOCKET: chosen, XDG_CONFIG_HOME: config, XDG_RUNTIME_DIR: run } })).toEqual({ session: "default", path: chosen, running: true });
+});
+
+it("finds the core's pipe on Windows by user and session, and calls it running only when Windows lists it", () => {
+  const { root } = scratch();
+  const base = { home: root, platform: "win32" as NodeJS.Platform };
+  const env = { USERNAME: "jupi.k", HC_SESSION: "work" };
+  // the user's ASCII letters and digits only, as hc names it
+  expect(coreSocket({ ...base, env, pipes: () => ["herdr-core-jupik-default.sock"] })).toEqual({ session: "work", path: "\\\\.\\pipe\\herdr-core-jupik-work.sock", running: false });
+  // the listing alone says so (there is no such pipe to look at), its names compared without case
+  expect(coreSocket({ ...base, env, pipes: () => ["other", "HERDR-CORE-JUPIK-WORK.sock"] }).running).toBe(true);
+  expect(coreSocket({ ...base, env, pipes: () => { throw new Error("no listing"); } }).running).toBe(false);
+  expect(coreSocket({ ...base, env: { HC_SOCKET: "\\\\.\\pipe\\mine.sock" }, pipes: () => ["mine.sock"] })).toEqual({ session: "default", path: "\\\\.\\pipe\\mine.sock", running: true });
+});
+
+it("reads hc's config on Windows under XDG_CONFIG_HOME, else %APPDATA%, else the profile's AppData\\Roaming", () => {
+  const { root } = scratch();
+  const home = join(root, "home");
+  const configure = (dir: string, socket: string) => {
+    mkdirSync(join(dir, "herdr-core"), { recursive: true });
+    writeFileSync(join(dir, "herdr-core", "config.toml"), `socket = "${toml(socket)}"\n`);
+  };
+  configure(join(root, "xdg"), "\\\\.\\pipe\\xdg.sock");
+  configure(join(root, "appdata"), "\\\\.\\pipe\\appdata.sock");
+  configure(join(home, "AppData", "Roaming"), "\\\\.\\pipe\\roaming.sock");
+  configure(join(home, ".config"), "\\\\.\\pipe\\unix.sock");
+  const path = (env: Record<string, string>) => coreSocket({ env, home, platform: "win32", pipes: () => [] }).path;
+  expect(path({ XDG_CONFIG_HOME: join(root, "xdg"), APPDATA: join(root, "appdata") })).toBe("\\\\.\\pipe\\xdg.sock");
+  expect(path({ APPDATA: join(root, "appdata") })).toBe("\\\\.\\pipe\\appdata.sock");
+  expect(path({})).toBe("\\\\.\\pipe\\roaming.sock");
+});
+
+it.skipIf(unix)("sees a real pipe in the Windows listing, under any case, without opening it", async () => {
+  const { root } = scratch();
+  const name = `Ovis-Test-Listed-${process.pid}.sock`;
+  let opened = 0;
+  const heard = Promise.withResolvers<void>();
+  const pipe = Bun.listen({ unix: `\\\\.\\pipe\\${name}`, socket: { open() { opened++; }, data() { heard.resolve(); } } });
+  try {
+    const look = (spelled: string) => coreSocket({ env: { HC_SOCKET: `\\\\.\\pipe\\${spelled}` }, home: root }).running;
+    expect(look(name)).toBe(true);
+    expect(look(name.toUpperCase())).toBe(true);
+    expect(look(`${name}-not`)).toBe(false);
+    // the test's own connection, heard after any the looks opened
+    const witness = await Bun.connect({ unix: `\\\\.\\pipe\\${name}`, socket: { data() {} } });
+    witness.write("x");
+    await heard.promise;
+    witness.end();
+    expect(opened).toBe(1);
+  } finally {
+    pipe.stop(true);
+  }
 });
 
 it.skipIf(!unix)("takes only output that starts with hc and a version, never a path or junk after a blank line", async () => {
@@ -158,7 +212,7 @@ it("reads the configured socket as TOML, escapes and all", () => {
   const { root } = scratch();
   const config = join(root, "config");
   mkdirSync(join(config, "herdr-core"), { recursive: true });
-  writeFileSync(join(config, "herdr-core", "config.toml"), `socket = "${join(root, "core")}\\u002Dsock"\n[other]\nsocket = "no"\n`);
+  writeFileSync(join(config, "herdr-core", "config.toml"), `socket = "${toml(join(root, "core"))}\\u002Dsock"\n[other]\nsocket = "no"\n`);
   expect(coreSocket({ env: { XDG_CONFIG_HOME: config }, home: root, platform: "linux", userRuntimeDir: null }).path).toBe(join(root, "core-sock"));
 });
 
