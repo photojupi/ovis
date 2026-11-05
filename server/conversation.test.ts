@@ -3468,6 +3468,9 @@ it("finds a Windows pane's session by the child claude.exe holding the PID recor
   const home = mkdtempSync(join(tmpdir(), "claude-win32-launcher-"));
   const previousHome = process.env["HOME"];
   const previousProfile = process.env["USERPROFILE"];
+  // or the lookup reads the developer's own store too
+  const previousConfig = process.env["CLAUDE_CONFIG_DIR"];
+  delete process.env["CLAUDE_CONFIG_DIR"];
   const session = "7d9f3a52-4e2c-4b1a-9c5d-8e7f6a5b4c32";
   const cwd = join(home, "work");
   const started = 1_793_000_000_000;
@@ -3513,6 +3516,7 @@ it("finds a Windows pane's session by the child claude.exe holding the PID recor
     Object.defineProperty(process, "platform", platform);
     if (previousHome === undefined) delete process.env["HOME"]; else process.env["HOME"] = previousHome;
     if (previousProfile === undefined) delete process.env["USERPROFILE"]; else process.env["USERPROFILE"] = previousProfile;
+    if (previousConfig === undefined) delete process.env["CLAUDE_CONFIG_DIR"]; else process.env["CLAUDE_CONFIG_DIR"] = previousConfig;
     table.mockRestore(); rpc.mockRestore();
     forgetTranscriptState();
     rmSync(home, { recursive: true, force: true });
