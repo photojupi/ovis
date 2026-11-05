@@ -853,7 +853,8 @@ Whether the core runs is read from its socket file (`HC_SOCKET`, `socket` in hc'
 session, `default` otherwise); nothing connects to it.
 
 On Windows Ovis serves herdr-core only when `OVIS_RUNTIME=herdr-core` is set, as the desktop app
-sets it: the automatic choice stays on herdr there, and Settings offers no switch.
+sets it: the automatic choice stays on herdr there, and Settings offers no switch. See
+[On Windows, with the Herdr app](#on-windows-with-the-herdr-app).
 
 On a Linux or macOS PC with herdr-core and no herdr, the one-line installer
 (`curl -fsSL https://ovis.sh/install.sh | sh`) sets this up by itself: no herdr and no plugin, Ovis
@@ -955,6 +956,43 @@ macOS). See [INSTALL.md](../INSTALL.md#2-choose-the-install-method).
   that machine as written (empty: its home). Pins and "seen" are not shared with the Herdr app
   there. Temporary machines (`hc machine add --temp`) are not shown, and
   PCs added over SSH or through the relay keep working beside them.
+
+### On Windows, with the Herdr app
+
+The Ovis server starts no core on Windows, so open the Herdr app first. Until the app's core pipe
+is listed under `\\.\pipe\` it runs no `hc connect` and says to open the app; listing opens no pipe,
+and Settings reads whether the core runs the same way. The `hc connect` it does run has a state
+folder hc cannot create, so one that fails starts nothing: a core Ovis started would take Ovis's
+whole environment into every terminal it opens, and would stop with Ovis. The pipe is `HC_SOCKET`,
+else `socket` in `%APPDATA%\herdr-core\config.toml` (under `XDG_CONFIG_HOME` when that is set),
+else `\\.\pipe\herdr-core-<user>-<session>.sock`, `<user>` being the ASCII letters and digits of
+`USERNAME`. (The Ovis desktop app starts a core of its own, in session `ovis`, before its server.)
+
+The Windows installer (`irm https://ovis.sh/install.ps1 | iex`, which **Install** in `Ovis.exe`
+runs) does not serve the app's terminals: it sets Ovis up as herdr's plugin on herdr's own,
+installing herdr and Bun for your user when they are missing. For the app, run Ovis from a clone of
+this repository with `scripts\herdr-app.ps1`. It needs Git for Windows and Bun 1.4 or newer already,
+needs no herdr, and installs only the clone's own packages:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\herdr-app.ps1 start
+```
+
+`start` installs the packages when there are none and builds the client when it is not of the
+checked-out commit, waits for the app's core (60 seconds, or as long as it takes with `-WaitCore`),
+then starts Ovis through `scripts/plugin.ts` with no window, and shows `status`. Started from a
+Herdr terminal, Ovis leaves that terminal's job and does not run hc as that terminal; where the job
+does not let it out, it says that Ovis stops with the terminal. A start leaves an Ovis already
+answering on its port as it is. `stop`, `status` and `pair` are those of `scripts/plugin.ts`,
+`restart` is `stop` then `start`, and `logs` shows the end of the server's log, with `-Follow` what
+comes next. It waits on `HC_SOCKET` or the default pipe name: with a `socket` in hc's config, set
+`HC_SOCKET` to the same.
+
+`autostart on` (or `off`, `status`) sets a value named **Ovis (Herdr app)** under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, apart from the **Ovis** one `Ovis.exe` adds to
+start `herdr server`. It runs `start -WaitCore` at sign-in through `conhost.exe --headless`, since a
+new console may open in Windows Terminal, where `-WindowStyle Hidden` only minimizes it. Some
+security tools flag that pattern; leave autostart off where yours does.
 
 ## Configuration
 
