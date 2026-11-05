@@ -46,15 +46,21 @@ export function isClaudeProcess(entry: { name?: string; argv0?: string; argv?: r
 /**
  * The Claude processes under a Windows pane's shell, from the process table: herdr and herdr-core
  * name only the shell in front there (windows-processes.ts). The nearest one, and any other not
- * started by it (two of them: which one a session belongs to cannot be told). Null when the table
+ * started by it (two of them: which one a session belongs to cannot be told). Of several, only those
+ * holding a live PID record count, once one does: the native claude.exe the shell started can run
+ * the session in a child claude.exe, and only that child writes the record. Null when the table
  * says nothing, which is no proof that no Claude runs there.
  */
-export async function windowsShellClaude(shellPid: number, table: () => Promise<ProcessRow[]> = recentProcessTable): Promise<{ pid: number; argv: string[] }[] | null> {
+export async function windowsShellClaude(shellPid: number, table: () => Promise<ProcessRow[]> = recentProcessTable, home = userHome()): Promise<{ pid: number; argv: string[] }[] | null> {
   const rows = await table();
   if (rows.length === 0) return null;
-  const claude = descendantProcesses(rows, shellPid).filter(isClaudeProcess);
-  const first = claude[0];
-  if (first === undefined) return [];
+  const all = descendantProcesses(rows, shellPid).filter(isClaudeProcess);
+  if (all.length < 2) return all;
+  // a record that is there but cannot be read, or one in two stores, may be the live one: its process may hold it
+  const holds = await Promise.all(all.map((entry) => windowsProcessStore(home, entry.pid, async () => rows).then((store) => store !== null, () => true)));
+  const holders = all.filter((_, index) => holds[index]);
+  const claude = holders.length > 0 ? holders : all;
+  const first = claude[0]!;
   const below = new Set(descendantProcesses(rows, first.pid).map((entry) => entry.pid));
   return claude.filter((entry) => entry === first || !below.has(entry.pid));
 }
