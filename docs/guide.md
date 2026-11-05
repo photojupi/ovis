@@ -904,9 +904,11 @@ macOS). See [INSTALL.md](../INSTALL.md#2-choose-the-install-method).
   PC's process table does not show what runs in WSL. herdr-core names only the shell in front of a
   Windows pane, so that table says the rest: the pane is busy while any program runs below its
   shell, console hosts aside, or the table cannot be read, and the agent has started once a
-  program named for it runs there. An argument the shell would change is refused before anything
-  is typed: in Windows PowerShell one whose whitespace all follows an odd number of `"`
-  (`"fix the bug"`, `x="a b"`); in PowerShell 7 an empty one, one holding a `"`, or one holding
+  program named for it runs there. A command PowerShell runs in itself (`Read-Host`) shows no
+  program there and takes the line as its input, and text left at a Windows prompt runs with the
+  line, as no key clears it in every editing mode. An argument the shell would change is refused
+  before anything is typed: in Windows PowerShell one whose whitespace all follows an odd number of
+  `"` (`"fix the bug"`, `x="a b"`); in PowerShell 7 an empty one, one holding a `"`, or one holding
   whitespace and ending in a backslash; in cmd one holding a `"` or a `%`. An agent PowerShell
   starts through a `.cmd` file alone (an npm install also has a `.ps1`, which PowerShell prefers)
   has its arguments read by cmd as well, which this does not refuse: `%NAME%` and `^` change there,

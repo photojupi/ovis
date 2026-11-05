@@ -751,6 +751,8 @@ function createAnswers(hc: HcConnection, firstTurn: FirstTurn, forgetTurns: (liv
       const paneId = paneIdOf(params);
       const kind = params["kind"];
       if (typeof kind !== "string" || !/^[a-z][a-z0-9-]*$/.test(kind)) throw new AdapterError("invalid_params", "kind is required");
+      // Command Code's command `cmd` is cmd.exe here, which would answer as a started agent
+      if (platform === "win32" && kind === "cmd") throw new AdapterError("invalid_params", "Command Code's command is cmd.exe on Windows");
       const args = Array.isArray(params["args"]) ? params["args"].filter((arg): arg is string => typeof arg === "string") : [];
       // a control character could end the quoted line early and type something else
       if (args.some((arg) => /[\u0000-\u001f\u007f]/.test(arg))) throw new AdapterError("invalid_params", "an argument holds a control character");

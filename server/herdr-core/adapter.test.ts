@@ -1100,13 +1100,15 @@ describe("herdr-core adapter, agents on Windows", () => {
   }
 
   it("offers the agents Ovis knows by kind, leaving the ones Ovis starts itself to the server", async () => {
-    const { socket } = await windows(HC_SHELL, () => idle);
+    const { socket, typed } = await windows(HC_SHELL, () => idle);
     const kinds = (await agentManifests(socket)).manifests.map((manifest) => manifest.agent);
     expect(kinds).toContain("claude");
     expect(kinds).toContain("codex");
     expect(kinds).not.toContain("omo");
-    // Command Code's command `cmd` is cmd.exe here
+    // Command Code's command `cmd` is cmd.exe here: not offered, and not started when asked
     expect(kinds).not.toContain("cmd");
+    await expect(agentStart({ name: "x", kind: "cmd", paneId: "t1" }, socket)).rejects.toMatchObject({ code: "invalid_params" });
+    expect(typed()).toBe("");
   });
 
   it("starts an agent in hc's own PowerShell by typing a call, and answers once it runs below the shell", async () => {
