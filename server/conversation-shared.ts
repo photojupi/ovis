@@ -40,7 +40,8 @@ export const UNAVAILABLE_DIAGNOSTICS = [...COPILOT_UNAVAILABLE_REASONS, "agent_c
 
 export class ConversationUnavailable extends Error {
   /** `screen`: the model and effort the agent's own live status line states (start-screen.ts), for the scrollback standing in */
-  constructor(reason: string, readonly screen?: ConversationMetadata, readonly diagnostic?: typeof UNAVAILABLE_DIAGNOSTICS[number]) {
+  /** `hint`: what the user could change for the pane to be read (ConversationResponse.hint) */
+  constructor(reason: string, readonly screen?: ConversationMetadata, readonly diagnostic?: typeof UNAVAILABLE_DIAGNOSTICS[number], readonly hint?: "copilot_ui_server") {
     super(reason);
     this.name = "ConversationUnavailable";
   }
@@ -73,7 +74,7 @@ export class HistoryChanged extends Error {
 /** What paneConversation resolved: which store the turns came from, and where they start. */
 export type RecognizedConversation = {
   activity?: "thinking" | "working" | "idle";
-  source: "dsh-transcript" | "copilot-transcript" | "grok-transcript" | "agy-transcript" | "muse-transcript" | "letta-transcript" | "kimi-transcript" | "claude-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "pi-transcript" | "cmd-transcript" | "codex-transcript" | "devin-transcript" | "opencode-transcript" | "hermes-transcript";
+  source: "dsh-transcript" | "kiro-transcript" | "copilot-transcript" | "grok-transcript" | "agy-transcript" | "muse-transcript" | "letta-transcript" | "kimi-transcript" | "claude-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "pi-transcript" | "cmd-transcript" | "codex-transcript" | "devin-transcript" | "opencode-transcript" | "hermes-transcript";
   turns: ConversationTurn[];
   metadata: ConversationMetadata;
   /** `metadata` was read off the agent's own screen (ConversationResponse.screen) */
@@ -94,7 +95,7 @@ export type RecognizedConversation = {
 };
 
 /** The stores read as one append-only file: OpenCode's and Devin's databases are paged by opencode.ts and devin.ts. */
-export type StreamSource = Exclude<RecognizedConversation["source"], "opencode-transcript" | "devin-transcript" | "hermes-transcript" | "dsh-transcript">;
+export type StreamSource = Exclude<RecognizedConversation["source"], "opencode-transcript" | "devin-transcript" | "hermes-transcript" | "dsh-transcript" | "kiro-transcript">;
 
 /** A restart may parse the same files differently: its answers never match an earlier ETag. */
 const PROCESS_VERSION = randomUUID();

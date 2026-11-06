@@ -73,7 +73,10 @@ export async function handleRelayRequest(request: Request, pathname: string, con
       case "/api/relay/link":
         setRequestRoute("/api/relay/link");
         if (service.status().phase === "off" || service.status().blocked) return fail("relay_off", "Start the relay before pairing.", 409);
-        return reply(service.pairingLink());
+        // the PC's own screen waiting to be added to an account: what that link brings is approved here only
+        // a query string is refused for every relay control (updateRequestAllowed), so the flag travels as a header,
+        // which another site cannot set without a preflight the PC never answers
+        return reply(service.pairingLink({ localOnly: request.headers.get("x-ovis-local-only") === "1" }));
       case "/api/relay/pairing": {
         setRequestRoute("/api/relay/pairing");
         const body = await readJsonObject(request);
@@ -85,6 +88,14 @@ export async function handleRelayRequest(request: Request, pathname: string, con
           return fail("relay_pairing_gone", "That phone is no longer waiting: it left, was decided, or its time ran out.", 404);
         }
         return reply({ ok: true });
+      }
+      case "/api/relay/direct": {
+        setRequestRoute("/api/relay/direct");
+        const body = await readJsonObject(request);
+        if (body instanceof Response) return body;
+        if (!service.directAvailable) return fail("direct_unavailable", "This server does not take direct connections.", 409);
+        if (typeof body.on !== "boolean") return fail("invalid_relay_direct", "Send { on: true } or { on: false }.", 400);
+        return reply(await service.setDirect(body.on));
       }
       case "/api/relay/reset-identity": {
         setRequestRoute("/api/relay/reset-identity");

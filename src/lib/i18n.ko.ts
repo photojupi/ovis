@@ -1,6 +1,8 @@
 import { SETTINGS_KO } from "./i18n/settings.ko.ts";
 import { SETTINGS_ACCESS_KO } from "./i18n/settings-access.ko.ts";
+import { SETTINGS_AGENTS_KO } from "./i18n/settings-agents.ko.ts";
 import { SETTINGS_COMPOSER_KO } from "./i18n/settings-composer.ko.ts";
+import { SETTINGS_LAYOUT_KO } from "./i18n/settings-layout.ko.ts";
 import { TERMINAL_KO } from "./i18n/terminal.ko.ts";
 import { COMPOSER_KO } from "./i18n/composer.ko.ts";
 import { CHAT_KO } from "./i18n/chat.ko.ts";
@@ -26,6 +28,7 @@ import { RELAY_KO } from "./i18n/relay.ko.ts";
  * braces keep their English names.
  */
 const BASE: Record<string, string> = {
+  "View only": "보기 전용",
   "Not pasted: the file's path holds a line break, which the terminal would take as Enter.": "붙여넣지 않았습니다: 파일 경로에 줄바꿈이 있어 터미널이 Enter로 받아들입니다.",
   "Attach files": "파일 첨부",
   "Sign out": "로그아웃",
@@ -37,10 +40,20 @@ const BASE: Record<string, string> = {
   "Signed in with {provider}": "{provider}로 로그인함",
   "Signing in…": "로그인하는 중…",
   "The sign-in did not finish. Try again.": "로그인을 끝내지 못했습니다. 다시 시도하세요.",
-  "Open GitHub and enter this code. Enter it only if you started this sign-in on this page.": "GitHub를 열고 이 코드를 입력하세요. 이 페이지에서 직접 시작한 로그인일 때만 입력하세요.",
-  "Waiting for GitHub…": "GitHub 승인을 기다리는 중…",
-  "Open GitHub": "GitHub 열기",
-  "GitHub refused the sign-in.": "GitHub에서 로그인을 거절했습니다.",
+  "Open {provider} and enter this code. Enter it only if you started this sign-in on this page.": "{provider}을(를) 열고 이 코드를 입력하세요. 이 페이지에서 직접 시작한 로그인일 때만 입력하세요.",
+  "Waiting for {provider}…": "{provider} 승인을 기다리는 중…",
+  "Open {provider}": "{provider} 열기",
+  "{provider} refused the sign-in.": "{provider}에서 로그인을 거절했습니다.",
+  "Your account already signs in with {provider}.": "이 계정은 이미 {provider}(으)로 로그인할 수 있습니다.",
+  "This {provider} sign-in already belongs to another Ovis account. Nothing was changed.": "이 {provider} 로그인은 이미 다른 Ovis 계정에 연결되어 있습니다. 아무것도 바뀌지 않았습니다.",
+  "Add another way to sign in before removing this one.": "이 방법을 지우기 전에 다른 로그인 방법을 먼저 추가하세요.",
+  "The sign-in method could not be removed. Try again.": "로그인 방법을 지우지 못했습니다. 다시 시도하세요.",
+  "Ways to sign in": "로그인 방법",
+  "Sign in again": "다시 로그인",
+  "Added {date}": "{date}에 추가됨",
+  "To change how you sign in, sign in again with {provider} first.": "로그인 방법을 바꾸려면 먼저 {provider}(으)로 다시 로그인하세요.",
+  "Add another way to sign in from the Ovis desktop app.": "다른 로그인 방법은 Ovis 데스크톱 앱에서 추가하세요.",
+  "Add {provider}": "{provider} 추가",
   "The code expired. Sign in again to get a new one.": "코드가 만료되었습니다. 다시 로그인해 새 코드를 받으세요.",
   "This account service can't sign in a browser on this PC yet.": "이 계정 서비스는 아직 이 PC의 브라우저 로그인을 지원하지 않습니다.",
   "Your sign-in ended. Sign in again to see every PC of your account.": "로그인이 끝났습니다. 계정의 PC를 모두 보려면 다시 로그인하세요.",
@@ -75,7 +88,7 @@ const BASE: Record<string, string> = {
   "Settings": "설정",
   "Chat": "채팅",
   "Agent default": "에이전트 기본값",
-  "Phone & devices": "폰 및 기기",
+  "Devices and PCs": "기기와 PC",
   "Access token": "접속 토큰",
 
   // ---- shortcuts (lib/shortcuts.ts labels) ----
@@ -110,6 +123,8 @@ const BASE: Record<string, string> = {
   "Show the terminal": "터미널 보기",
   "Show the chat": "채팅 보기",
   "Close this half": "이쪽 화면 닫기",
+  "Remove from the split": "분할에서 빼기",
+  "Resize the split": "분할 크기 조절",
   "Toggle sidebar (⌘⇧B)": "사이드바 토글 (⌘⇧B)",
   "Chat transcript (⌘⇧J)": "채팅 기록 (⌘⇧J)",
   "Live terminal (⌘⇧J)": "실시간 터미널 (⌘⇧J)",
@@ -150,7 +165,6 @@ const BASE: Record<string, string> = {
   "Command palette (⌘⇧K)": "명령 팔레트 (⌘⇧K)",
   "Could not sign out. Try again.": "로그아웃하지 못했습니다. 다시 시도해 주세요.",
   "Retry": "다시 시도",
-  "Notify me when a pane needs input or finishes": "패널이 입력을 기다리거나 끝나면 알려줍니다",
   "On, pushed to this device": "켜짐, 이 기기로 푸시",
   "Alerts on, pushed to this device, even with the app closed. Tap to turn them off": "알림 켜짐, 이 기기로 푸시됩니다. 앱을 닫아도 옵니다. 누르면 꺼집니다",
   "Off on this device": "이 기기에서 꺼짐",
@@ -187,12 +201,10 @@ const BASE: Record<string, string> = {
   "Via Tailscale, or Funnel from the internet": "Tailscale을 거쳐 연결, 또는 인터넷에서 Funnel로 연결",
   "Via the local network": "로컬 네트워크를 거쳐 연결",
   "Straight to this address": "이 주소로 바로 연결",
-  "Sessions on this PC": "이 PC의 세션",
-  "{count} working": "작업 중 {count}개",
   "{count} waiting for you": "내 응답 대기 {count}개",
-  "{count} done": "완료 {count}개",
   "Open the next session waiting for you": "응답을 기다리는 다음 세션 열기",
   "Tab {index} of {count}": "탭 {count}개 중 {index}번째",
+  "Tabs of {workspace}": "{workspace}의 탭",
   "Reconnecting…": "재연결 중…",
   "Add PC": "PC 추가",
   "Connect": "연결",
@@ -219,6 +231,7 @@ const BASE: Record<string, string> = {
   "No matching folders": "일치하는 폴더가 없습니다",
   "This folder cannot be opened.": "이 폴더를 열 수 없습니다.",
   "Folders could not be loaded.": "폴더를 불러올 수 없습니다.",
+  "Unlock agent": "에이전트 잠금 해제",
 
   // ---- files ----
   "Files": "파일",
@@ -245,7 +258,6 @@ const BASE: Record<string, string> = {
   "New code": "새 코드",
   "Paired: {name}.": "페어링됨: {name}.",
   "QR code that pairs a phone with code {code}": "코드 {code}로 폰을 페어링하는 QR 코드",
-  "Connect a phone": "폰 연결",
   "Pairing code": "페어링 코드",
   "Open this address on your phone": "폰에서 이 주소를 여세요",
   "{agent} is ready": "{agent} 준비 완료",
@@ -276,7 +288,7 @@ const BASE: Record<string, string> = {
   "Microphone permission was denied": "마이크 권한이 거부되었습니다",
   "Voice input needs HTTPS": "음성 입력에는 HTTPS가 필요합니다",
   // ---- errors (lib/userError.ts) ----
-  "This browser is not signed in to this PC any more. Pair it again in Settings → Phone & devices.": "이 브라우저는 더 이상 이 PC에 로그인되어 있지 않습니다. 설정 → 폰 및 기기에서 다시 페어링하세요.",
+  "This browser is not signed in to this PC any more. Pair it again in Settings → Devices and PCs.": "이 브라우저는 더 이상 이 PC에 로그인되어 있지 않습니다. 설정 → 기기와 PC에서 다시 페어링하세요.",
   "That item no longer exists on the PC. Refresh and try again.": "그 항목은 PC에 더 이상 없습니다. 새로 고친 뒤 다시 시도하세요.",
   "It changed on the PC while you were acting. Check it and try again.": "작업하는 동안 PC에서 내용이 바뀌었습니다. 확인한 뒤 다시 시도하세요.",
   "The PC took too long to answer. Try again.": "PC가 너무 오래 응답하지 않았습니다. 다시 시도하세요.",
@@ -291,7 +303,7 @@ const BASE: Record<string, string> = {
   "Can't reach the PC": "PC에 연결할 수 없음",
   "PC disk is full": "PC 디스크가 가득 참",
   "No permission on the PC": "PC에서 권한 없음",
-  "Pair it again in Settings → Phone & devices.": "설정 → 폰 및 기기에서 다시 페어링하세요.",
+  "Pair it again in Settings → Devices and PCs.": "설정 → 기기와 PC에서 다시 페어링하세요.",
   "Refresh and try again.": "새로 고친 뒤 다시 시도하세요.",
   "Check it and try again.": "확인한 뒤 다시 시도하세요.",
   "Check your connection, then try again.": "연결을 확인한 뒤 다시 시도하세요.",
@@ -368,9 +380,6 @@ const BASE: Record<string, string> = {
   "Copy details": "자세한 내용 복사",
   "This pane can't be shown.": "이 패널을 표시할 수 없습니다.",
   "The sidebar can't be shown.": "사이드바를 표시할 수 없습니다.",
-  "Diff layout": "비교 보기 방식",
-  "Unified": "한 열",
-  "Split": "나란히",
   // t3code ports (a)
   // t3code ports (d)
   "Change PC": "PC 바꾸기",
@@ -408,7 +417,6 @@ const BASE: Record<string, string> = {
   "this PC": "이 PC",
   "It matches": "같습니다",
   "Does {name}'s screen show this ID?": "{name} 화면에 이 ID가 보이나요?",
-  "The PC shows its ID under the code, in Settings → Phone & devices. Pair only if every group matches.": "PC는 설정 → 폰 및 기기의 코드 아래에 자기 ID를 보여 줍니다. 모든 묶음이 같을 때만 페어링하세요.",
   "ID of the PC this code found": "이 코드로 찾은 PC의 ID",
   "A code has ten letters and digits, like 7K3QD-M2XHA.": "코드는 7K3QD-M2XHA처럼 영문과 숫자 열 자입니다.",
   "No PC shows this code. Check it, or show a new one on the PC.": "이 코드를 보여 주는 PC가 없습니다. 코드를 확인하거나 PC에서 새 코드를 띄우세요.",
@@ -423,12 +431,40 @@ const BASE: Record<string, string> = {
   "New group": "새 그룹",
   "Add group": "그룹 추가",
   "No group": "그룹 없음",
+  "Context {percent}% left": "컨텍스트 {percent}% 남음",
+  "{used} of {window} tokens": "{window} 토큰 중 {used}",
+  "Permission mode": "권한 모드",
+  "Model": "모델",
+  "One model name, without spaces.": "띄어쓰기 없는 모델 이름 하나를 적으세요.",
+  "Effort": "노력 수준",
+  "Sandbox and approvals": "샌드박스와 승인",
+  "Add this PC to my account": "이 PC를 내 계정에 추가",
+  "Add this PC to your account, so every device of your account can use it with one approval.": "이 PC를 계정에 추가하면 한 번만 승인해서 계정의 모든 기기가 쓸 수 있습니다.",
+  "Every device of your account can use this PC after that.": "그 뒤에는 계정의 모든 기기가 이 PC를 쓸 수 있습니다.",
+  "On a phone already in your account, open the Ovis app and tap Add on {name}. Then approve it here.": "이미 계정에 있는 폰에서 Ovis 앱을 열고 {name}의 추가를 누르세요. 그런 다음 여기서 승인하세요.",
+  "This PC could not be listed in your account. Try again.": "이 PC를 계정에 올리지 못했습니다. 다시 시도하세요.",
+  "Turn on remote access through the Ovis relay above first.": "먼저 위에서 Ovis 릴레이를 통한 원격 접속을 켜세요.",
+  "New terminal": "새 터미널",
+  "New terminal failed: {reason}": "새 터미널 열기 실패: {reason}",
+  "herdr prefix: press a key": "herdr 접두키: 키를 누르세요",
+  "Connect a device": "기기 연결",
+  "This device": "이 기기",
+  "Sign out of {provider}": "{provider} 로그아웃",
+  "Ovis relay": "Ovis 릴레이",
+  "Reset relay identity": "릴레이 신원 재설정",
+  "Reset the relay identity?": "릴레이 신원을 재설정할까요?",
+  "Phones paired through the relay will need to scan a new code.": "릴레이로 페어링된 폰은 새 코드를 다시 스캔해야 합니다.",
+  "Pairs this phone through the relay, so Ovis keeps working away from home.": "이 폰을 릴레이로 페어링해 집 밖에서도 Ovis를 쓸 수 있게 합니다.",
+  "This PC": "이 PC",
+  "Paste and send": "붙여넣고 보내기",
+  "Conversation": "대화",
+  "Off": "끄기",
 };
 
 /** The parts KO is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */
 export const KO_PARTS: Record<string, Record<string, string>> = {
   base: BASE,
-  settings: { ...SETTINGS_KO, ...SETTINGS_ACCESS_KO, ...SETTINGS_COMPOSER_KO },
+  settings: { ...SETTINGS_KO, ...SETTINGS_ACCESS_KO, ...SETTINGS_COMPOSER_KO, ...SETTINGS_LAYOUT_KO, ...SETTINGS_AGENTS_KO },
   terminal: TERMINAL_KO,
   composer: COMPOSER_KO,
   chat: CHAT_KO,

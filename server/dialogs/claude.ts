@@ -95,7 +95,7 @@ export function withoutClaudeSidePanel(screen: string): string {
     return columns;
   };
   const top = edges(lines[0] ?? "").filter((at) => at >= CLAUDE_SIDE_PANEL_MIN_COLUMN);
-  if (top.length === 0) return screen;
+  if (top.length === 0) return withoutClaudeEdgelessPanel(screen, lines);
   // each row's edges once, past the top row's check that turns away most screens
   const rowEdges = lines.map((line, index) => index === 0 ? top : edges(line));
   const rowsAt = (column: number): number => {
@@ -106,20 +106,108 @@ export function withoutClaudeSidePanel(screen: string): string {
   // the panel's edge runs through the footer; a table's column divider stops where the table ends
   const throughFooter = (rows: number): boolean => rows >= CLAUDE_SIDE_PANEL_MIN_ROWS && lines.slice(rows).every((line) => line.trim() === "");
   const column = top.find((at) => throughFooter(rowsAt(at)));
-  if (column === undefined) return screen;
+  if (column === undefined) return withoutClaudeEdgelessPanel(screen, lines);
   const rows = rowsAt(column);
   return lines.map((line, index) => index < rows ? line.slice(0, indexAtColumn(line, column)).trimEnd() : line).join("\n");
 }
 
-function withoutPreview(lines: string[], from: number, to: number): string[] {
-  let column = -1;
-  for (let index = from; index <= to && column < 0; index += 1) {
-    const line = lines[index] ?? "";
-    const corner = /\s{2,}[┌╭]/.exec(line);
-    if (corner !== null) column = Bun.stringWidth(line.slice(0, corner.index + corner[0].length - 1));
+/**
+ * When its diff plugin is not drawing it, Claude Code draws the same panel as a plain sidebar: no `│`
+ * edge, only a background color, its `✕` at the end of one of the screen's top rows, beside the session's
+ * text on every row from the top (#2730, measured on 2.1.318 and 2.1.319). The session's column ends where
+ * its widest rule from column 0 ends (a menu's top border), and the panel's text starts past one blank
+ * column. Rows are cut there only when that column is blank on every row and the `✕` stands past it;
+ * without the panel the rule spans the pane and nothing stands past it. The rows keep their colors, which
+ * say which of Claude's question tabs is shown.
+ */
+function withoutClaudeEdgelessPanel(screen: string, lines: string[]): string {
+  const column = Math.max(0, ...lines.map((line) => /^─*/.exec(line)![0].length));
+  if (column < CLAUDE_SIDE_PANEL_MIN_COLUMN) return screen;
+  // where each row's text past the column starts: -1 when the row ends before it, null when the column is not blank
+  const starts = lines.map((line) => {
+    if (Bun.stringWidth(line) <= column) return -1;
+    const at = indexAtColumn(line, column);
+    return at >= 0 && line[at] === " " ? at : null;
+  });
+  if (starts.some((at) => at === null)) return screen;
+  const closable = lines.slice(0, 3).some((line, index) => starts[index]! >= 0 && line.trimEnd().endsWith("✕"));
+  if (!closable) return screen;
+  return screen.split(/\r?\n/).map((line, index) => starts[index]! >= 0 ? coloredBefore(line, column) : line).join("\n");
+}
+
+/** a colored line's text left of the terminal column `column`, its color codes kept */
+function coloredBefore(line: string, column: number): string {
+  let kept = "";
+  let width = 0;
+  for (const part of line.split(/(\u001b\[[0-?]*[ -/]*[@-~])/)) {
+    if (part.startsWith("\u001b[")) { kept += part; continue; }
+    for (const { segment } of GRAPHEMES.segment(part)) {
+      width += Bun.stringWidth(segment);
+      if (width > column) return kept.trimEnd();
+      kept += segment;
+    }
   }
-  return lines.map((line) => {
-    const at = column >= 2 ? indexAtColumn(line, column) : -1;
+  return kept.trimEnd();
+}
+
+/**
+ * the preview box's top row, the column its left edge stands in, and the columns between its edges
+ * (0 when its right corner is not on that row), from its top corner; null without one
+ */
+function previewBox(lines: string[], from: number, to: number): { top: number; column: number; inner: number } | null {
+  for (let index = from; index <= to; index += 1) {
+    const line = lines[index] ?? "";
+    // the box stands right of the menu: a corner in an option's own label is further left
+    const corner = [...line.matchAll(/\s{2,}[┌╭]/g)].at(-1);
+    if (corner === undefined) continue;
+    const left = corner.index + corner[0].length - 1;
+    const right = /^[─━]*[┐╮]/.exec(line.slice(left + 1));
+    return { top: index, column: Bun.stringWidth(line.slice(0, left)), inner: right === null ? 0 : right[0].length - 1 };
+  }
+  return null;
+}
+
+/**
+ * A box narrower than this (a pane of about 40 columns) shows its preview in pieces too small to read
+ * (`+-` and `-+` of a `+--+ +--+`, measured on 2.1.312): the card shows none, as before, and the
+ * terminal is where to look.
+ */
+const CLAUDE_PREVIEW_MIN_WIDTH = 20;
+
+/**
+ * What the preview box shows, row by row as drawn (Claude wraps a long line at the box's width), and
+ * the rows Claude cut from a long preview, which it names on a `├─── ✂ ─── 31 lines hidden ───┤` row
+ * (measured on 2.1.312). Only the option under the cursor has its preview drawn.
+ */
+function previewText(lines: string[], box: { top: number; column: number; inner: number }): { text: string; hidden_lines?: number } | null {
+  const rows: string[] = [];
+  let hidden: number | undefined;
+  for (let index = box.top + 1; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    const at = indexAtColumn(line, box.column);
+    const edge = at >= 0 ? line[at] : undefined;
+    // between its two edges only: whatever stands right of the box is not the preview
+    const right = edge === "│" ? indexAtColumn(line, box.column + box.inner + 1) : -1;
+    if (edge === "│" && line[right] !== "│") return null;
+    if (edge === "│") rows.push(line.slice(at + 1, right).replace(/^ /, "").trimEnd());
+    else if (edge === "├") hidden = Number(/(\d+)\s+lines?\s+hidden/i.exec(line)?.[1]) || hidden;
+    else if (edge === "└" || edge === "╰") {
+      const text = rows.join("\n").replace(/^\n+|\n+$/g, "");
+      return text ? { text, ...(hidden ? { hidden_lines: hidden } : {}) } : null;
+    } else return null;
+  }
+  return null;
+}
+
+function withoutPreview(lines: string[], from: number, to: number): string[] {
+  // Claude opens the box on the first option's row: a box drawn higher up (a diagram in its answer)
+  // stands at a column of its own
+  const first = menuRows(lines, from, to)[0]?.lineIndex;
+  const box = (first === undefined ? null : previewBox(lines, first, first)) ?? previewBox(lines, from, to);
+  const column = box?.column ?? -1;
+  return lines.map((line, index) => {
+    // nothing above the box's top row is the box's: a question may draw an edge at its column
+    const at = column >= 2 && index >= box!.top ? indexAtColumn(line, column) : -1;
     const edge = at >= 0 ? line[at] : undefined;
     const boxed = edge !== undefined && PREVIEW_EDGE.includes(edge) && line.slice(Math.max(0, at - 2), at) === "  ";
     // only the preview's own notes line goes: a question may begin with "Notes:" too
@@ -202,7 +290,15 @@ function parseClaudeQuestion(screen: string): ParsedPrompt | null {
     // the id reads the tab shown (its title names it and its place): two tabs asking the same are two
     // cards. On the first question still open it is the title a read without colors gives too
   }, { steps: undefined, can_step_back: undefined });
-  return words === null ? parsed : { ...parsed, screen_words: words };
+  // the box follows the cursor: left out of the card's id, like the words over the question
+  // Claude opens the box on the first option's row: a box drawn higher up is no option's
+  const box = preview ? previewBox(raw, rows[0]!.lineIndex, rows[0]!.lineIndex) : null;
+  const drawn = box !== null && box.column >= 2 && box.inner >= CLAUDE_PREVIEW_MIN_WIDTH && rowAt >= 0 && rowAt < optionRows.length ? previewText(raw, box) : null;
+  return {
+    ...parsed,
+    ...(words === null ? {} : { screen_words: words }),
+    ...(drawn === null ? {} : { option_preview: { option_index: rowAt, ...drawn } }),
+  };
 }
 
 /**

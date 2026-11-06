@@ -5,11 +5,17 @@ import { sanitizeFontFamily } from "./fontFamily.ts";
 import { sanitizeUiFontSize } from "./typography.ts";
 import { sanitizeKeyBarExtras } from "./keys.ts";
 import { LANGUAGE_SETTINGS, type LanguageSetting } from "./i18n.ts";
-import { CHAT_WIDTHS, DICTATION_LANGUAGES, DIFF_STYLES, MARKDOWN_WIDTHS, VOICE_BUTTONS,
+import { CHAT_WIDTHS, DICTATION_LANGUAGES, DIFF_STYLES, VOICE_BUTTONS,
   QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, USAGE_KEYS_MAX, TERMINAL_FONT_MIN, TERMINAL_FONT_MAX,
   TERMINAL_WHEEL_SPEED_MIN, TERMINAL_WHEEL_SPEED_MAX, CHAT_FONT_MIN, CHAT_FONT_MAX,
   type Settings as CurrentSettings, type ChatWidth, type DictationLanguage, type VoiceButton } from "./settings.ts";
-type Settings = Omit<CurrentSettings, "keyBarExpanded" | "darkTheme" | "lightTheme" | "fileOpen" | "filesPanel" | "webLinks" | "reuseExternalLinkTab" | "claudeLaunchMode" | "codexLaunchMode" | "followHerdrFocus" | "composerNewTabButton" | "composerArtifacts" | "composerPasteSend" | "composerBtw" | "uiFontFamily" | "terminalMirrorWrap" | "sidebarFilter" | "pcLoad" | "historyPrompts" | "expandThinking" | "foldWork" | "autoTabNames" | "voiceEngine" | "agentGroups" | "agentGroupSort" | "terminalImages" | "terminalAttachButton" | "agentLocks" | "lockedAgents" | "terminalKeyboardOnRequest" | "terminalFoldKeyBar" | "fileFontSize" | "fileFontBase" | "agentNamedGroups" | "agentGroupNames" | "agentGroupOf">;
+type Settings = Omit<CurrentSettings, "opencodeParentEnds" | "keyBarExpanded" | "herdrPrefixKeys" | "darkTheme" | "lightTheme" | "fileOpen" | "filesPanel" | "filesDocuments" | "webLinks" | "reuseExternalLinkTab" | "claudeLaunchMode" | "codexLaunchMode" | "claudeLaunchModel" | "claudeLaunchEffort" | "codexLaunchModel" | "codexLaunchEffort" | "followHerdrFocus" | "sidebarPeek" | "sidebarBackgroundWorkspaces" | "splitGrid" | "codexDrag" | "composerNewTabButton" | "composerArtifacts" | "composerPasteSend" | "composerBtw" | "uiFontFamily" | "terminalMirrorWrap" | "sidebarFilter" | "sidebarContext" | "sidebarAgentTree" | "foldHelpers" | "pcLoad" | "historyPrompts" | "expandThinking" | "foldWork" | "chatRequestDetails" | "autoTabNames" | "voiceEngine" | "agentGroups" | "agentGroupSort" | "terminalImages" | "terminalAttachButton" | "agentLocks" | "lockedAgents" | "terminalKeyboardOnRequest" | "terminalFoldKeyBar" | "markdownOutline" | "fileFontSize" | "fileFontBase" | "agentNamedGroups" | "agentGroupNames" | "agentGroupOf" | "editTextFiles"> & {
+  /** Settings → Chat → Markdown width, which this pinned version still kept (removed from Settings since) */
+  markdownWidth: "readable" | "full";
+  /** Settings → Alerts → In the app, which this pinned version still kept (removed from Settings since) */
+  alertInApp: boolean;
+};
+const MARKDOWN_WIDTHS = ["readable", "full"] as const;
 type Palette = "amber" | "charcoal" | "catppuccin";
 const PALETTES: readonly Palette[] = ["amber", "charcoal", "catppuccin"];
 const STORAGE_KEY = "ovis:settings";

@@ -1402,11 +1402,42 @@ describe("the Claude under a Windows pane's shell", () => {
     const dir = home();
     record(join(dir, ".claude"), INNER);
     expect(await windowsShellClaude(SHELL, async () => chain, dir)).toEqual([{ pid: INNER, argv: [CLAUDE_EXE, "--permission-mode", "auto"] }]);
-    // in another store Claude may use, and with a Claude beside it that has written none
+    // in another store Claude may use
     const other = home();
     record(join(other, ".claude-work"), INNER);
     expect(await pids(other)).toEqual([INNER]);
-    expect(await pids(other, [...chain, beside])).toEqual([INNER]);
+  });
+
+  it("keeps a Claude beside the record's holder that has written none: a `claude attach` client in front writes no record either", async () => {
+    const dir = home();
+    record(join(dir, ".claude"), INNER);
+    const rows = [...chain, beside];
+    expect(await pids(dir, rows)).toEqual([INNER, BESIDE]);
+    const found = (await windowsShellClaude(SHELL, async () => rows, dir))!;
+    expect(await paneClaudeSource(found, dir, "win32", async () => rows)).toEqual({ state: "ambiguous" });
+  });
+
+  it("never hands over from a `claude attach` client, nor passes one over below a launcher: it names its session by its job", async () => {
+    const dir = home();
+    const attach = row(LAUNCHER, SHELL, CLAUDE_EXE, `"${CLAUDE_EXE}" attach dc5643bd`, STARTED - 1_000);
+    record(join(dir, ".claude"), INNER);
+    // an attach client the shell started, with a recorded Claude below it
+    expect(await pids(dir, [chain[0]!, attach, chain[3]!])).toEqual([LAUNCHER]);
+    // a launcher whose children are an attach client and a recorded Claude: neither can be told the one in front
+    const attached = row(6700, LAUNCHER, CLAUDE_EXE, `"${CLAUDE_EXE}" attach dc5643bd`, STARTED + 1_000);
+    expect(await pids(dir, [...chain, attached])).toEqual([INNER, 6700]);
+  });
+
+  it("hands over only from a Claude with no record file: one with a torn or leftover record stays, though a Claude below it holds one", async () => {
+    const nested = row(6600, 6400, CLAUDE_EXE, `"${CLAUDE_EXE}" -p hi`, STARTED + 3_000);
+    const rows = [...chain, nested];
+    for (const left of ["{\"pid\":62", JSON.stringify({ pid: INNER, sessionId: SESSION, procStart: "1", kind: "interactive" })]) {
+      const dir = home();
+      record(join(dir, ".claude"), nested.pid, STARTED + 3_000);
+      writeFileSync(join(dir, ".claude", "sessions", `${INNER}.json`), left);
+      // the launcher hands over to the session's Claude, which keeps its own place whatever its record says
+      expect(await pids(dir, rows)).toEqual([INNER]);
+    }
   });
 
   it("reads the table once, and no store for a lone Claude", async () => {
@@ -1425,13 +1456,15 @@ describe("the Claude under a Windows pane's shell", () => {
     }
   });
 
-  it("keeps the nearest Claude and any other not started by it while none holds a live record", async () => {
+  it("keeps the nearest Claude and any other not started by it while none below it has a record file", async () => {
     const dir = home();
     expect(await pids(dir)).toEqual([LAUNCHER]);
     expect(await pids(dir, [...chain, beside])).toEqual([LAUNCHER, BESIDE]);
-    // the record a finished process left at the number the session's Claude has now
+    // the record a finished process left at the number the session's Claude has now: that Claude
+    // is still the one the launcher started, and its store check finds no live session in it
     record(join(dir, ".claude"), INNER, STARTED - 10_000);
-    expect(await pids(dir)).toEqual([LAUNCHER]);
+    expect(await pids(dir)).toEqual([INNER]);
+    expect(await paneClaudeSource([{ pid: INNER, argv: [CLAUDE_EXE] }], dir, "win32", async () => chain)).toEqual({ state: "unreadable" });
   });
 
   it("takes a lone Claude with or without a record, finds none under another shell, and has no answer from an empty table", async () => {
@@ -1449,7 +1482,7 @@ describe("the Claude under a Windows pane's shell", () => {
     record(join(dir, ".claude"), INNER);
     record(join(dir, ".claude"), BESIDE);
     const rows = [...chain, beside];
-    expect(await pids(dir, rows)).toEqual([BESIDE, INNER]);
+    expect(await pids(dir, rows)).toEqual([INNER, BESIDE]);
     const found = (await windowsShellClaude(SHELL, async () => rows, dir))!;
     expect(await paneClaudeSource(found, dir, "win32", async () => rows)).toEqual({ state: "ambiguous" });
   });
@@ -1473,16 +1506,16 @@ describe("the Claude under a Windows pane's shell", () => {
 
   it("takes a record that cannot be read, or that two stores hold, for one its process may hold", async () => {
     const dir = home();
-    const rows = [...chain, beside];
     record(join(dir, ".claude"), INNER);
-    record(join(dir, ".claude"), BESIDE);
-    const unreadable = join(dir, ".claude", "sessions", `${BESIDE}.json`);
+    const unreadable = join(dir, ".claude", "sessions", `${INNER}.json`);
     const open = fsPromises.open;
     const opened = spyOn(fsPromises, "open").mockImplementation(((path, flags, mode) => path === unreadable
       ? Promise.reject(Object.assign(new Error("EIO: i/o error, open"), { code: "EIO" }))
       : open(path, flags, mode)) as typeof open);
     try {
-      expect(await pids(dir, rows)).toEqual([BESIDE, INNER]);
+      const found = (await windowsShellClaude(SHELL, async () => chain, dir))!;
+      expect(found.map((entry) => entry.pid)).toEqual([INNER]);
+      expect(await paneClaudeSource(found, dir, "win32", async () => chain)).toEqual({ state: "ambiguous" });
       expect(opened).toHaveBeenCalledWith(unreadable, expect.anything());
     } finally { opened.mockRestore(); }
     // a store copied while Claude ran: the process stands, and its store stays one that cannot be told

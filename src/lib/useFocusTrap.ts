@@ -7,6 +7,7 @@
  * when it can hold the focus itself (a dialog whose controls are all disabled while it works).
  */
 import { useEffect, useLayoutEffect, useRef, type MutableRefObject, type RefObject } from "react";
+import { typeAheadFocused } from "./typeAhead.ts";
 
 /** Tab stops in DOM order; what a user reaches with Tab inside the surface. */
 const FOCUSABLE = [
@@ -64,6 +65,16 @@ export function nativeModalOver(surface: HTMLElement | null): boolean {
   return false;
 }
 
+/**
+ * The keyboard is in another `aria-modal` surface than this one. Window and document listeners run in the order
+ * they were added, not the order the dialogs are drawn in, so a dialog beneath leaves this Escape to the one in
+ * front, the one with the focus (#3037).
+ */
+export function focusInOtherModal(surface: HTMLElement | null): boolean {
+  const focused = document.activeElement?.closest("[aria-modal='true']");
+  return focused != null && focused !== surface;
+}
+
 export function useFocusTrap<T extends HTMLElement>(open: boolean, options: FocusTrapOptions = {}): MutableRefObject<T | null> {
   const surface = useRef<T | null>(null);
   // read in the listeners, so a dialog that changes its mind mid-life is not held to its first render
@@ -99,7 +110,8 @@ export function useFocusTrap<T extends HTMLElement>(open: boolean, options: Focu
     const trap = {};
     openTraps.push(trap);
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== "Tab" || openTraps.at(-1) !== trap) return;
+      // keys typed ahead for a tab the dialog is making are that tab's, Tab included (lib/typeAhead.ts)
+      if (event.key !== "Tab" || openTraps.at(-1) !== trap || typeAheadFocused()) return;
       const node = surface.current;
       if (!node || nativeModalOver(node)) return;
       const stops = tabStops(node);

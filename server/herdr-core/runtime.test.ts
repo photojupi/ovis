@@ -278,6 +278,8 @@ it("spawns hc connect off Windows with no environment of its own but a machine's
   await freshRuntime();
   const spawn = noProcesses();
   Object.defineProperty(process, "platform", { value: "linux" });
+  // a core of its own: spawnHcConnect turns down the default one under a test session (bun run check)
+  process.env["HC_SOCKET"] = join(tmpdir(), "ovis-test-no-core.sock");
   const hc = coreConnection();
   cleanup = () => hc.close();
   await expect(hc.hello()).rejects.toMatchObject({ kind: "closed", message: expect.stringContaining("hc could not be started") });

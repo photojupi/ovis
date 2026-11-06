@@ -7,6 +7,7 @@ import type { ConversationSearchResponse } from "../../shared/conversation-searc
 import { resumeConnectionTraces } from "./connectionTrace.ts";
 import type { PullRequestCheckLog, PullRequestMergeRequest, PullRequestView } from "../../shared/pull-request.ts";
 import type { SystemReport } from "../../shared/system.ts";
+import type { EditableText, PaneDocuments, TextSaved, TextSaveRequest } from "../../shared/files.ts";
 import { parseSystemReport } from "./systemReport.ts";
 import { machinePath, type BridgeHealth, type HerdrCoreFacts, type HerdrIdentity, type HerdrRuntimeFacts, type Machine, type MachineRoster, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
 import type {
@@ -88,6 +89,7 @@ import type {
   PluginActionResult,
   PluginActions,
   PluginActionsResponse,
+  WorktreeInventory,
   WorktreeListing,
   WorktreeOpened,
   WorktreeRemoved,
@@ -292,9 +294,12 @@ export function cancelRelayCode(): Promise<{ readonly ok: true }> {
   return getJson<{ readonly ok: true }>("/api/relay/code/cancel", { method: "POST", headers: { "x-herdr-update": "1" } });
 }
 
-/** POST /api/relay/link: a pairing link without a code; the phone that opens it compares six digits with this PC. */
-export function requestRelayLink(): Promise<{ readonly url: string }> {
-  return getJson<{ readonly url: string }>("/api/relay/link", { method: "POST", headers: { "x-herdr-update": "1" } });
+/**
+ * POST /api/relay/link: a pairing link without a code; the phone that opens it compares six digits with this PC.
+ * `localOnly`: this PC's screen waits to be added to an account, so what comes is approved on this PC only.
+ */
+export function requestRelayLink(options: { localOnly?: boolean } = {}): Promise<{ readonly url: string }> {
+  return getJson<{ readonly url: string }>("/api/relay/link", { method: "POST", headers: { "x-herdr-update": "1", ...(options.localOnly ? { "x-ovis-local-only": "1" } : {}) } });
 }
 
 /** POST /api/relay/pairing: the owner's answer to a phone waiting with the same digits (`relay-pairings` events). */
@@ -961,7 +966,7 @@ export async function uploadPaneImage(paneId: string, image: Blob, machineId = "
   return ((await response.json()) as { path: string }).path;
 }
 
-async function sendJson(url: string, method: "POST" | "PATCH" | "DELETE", body: unknown): Promise<Response> {
+async function sendJson(url: string, method: "POST" | "PATCH" | "PUT" | "DELETE", body: unknown): Promise<Response> {
   const response = await apiFetch(url, {
     method,
     headers: { "content-type": "application/json", "x-herdr-machine": "1" },
@@ -1152,6 +1157,16 @@ export async function fetchFileInfo(path: string, paneId: string | null, machine
   return (await response.json()) as FileInfo;
 }
 
+/** GET /api/fs/text: a text file under the pane's folder, read to edit it (shared/files.ts). */
+export async function fetchEditableText(path: string, paneId: string, machineId = "local"): Promise<EditableText> {
+  return getJson<EditableText>(machinePath(machineId, `fs/text?${fileQuery(path, paneId)}`), { cache: "no-store" });
+}
+
+/** PUT /api/fs/text: saves the text over the file read with `revision`; a file changed since is an ApiError `stale_revision`. */
+export async function saveEditableText(request: TextSaveRequest, machineId = "local"): Promise<TextSaved> {
+  return (await (await sendJson(machinePath(machineId, "fs/text"), "PUT", request)).json()) as TextSaved;
+}
+
 /** GET /api/fs/favicon: the icon the project in folder `root` keeps, or null, in one request. */
 export async function fetchProjectFavicon(root: string, machineId = "local"): Promise<FileInfo | null> {
   return (await getJson<ProjectFavicon>(projectFaviconUrl(root, machineId))).icon;
@@ -1259,6 +1274,14 @@ export async function createWorktree(request: CreateWorktreeRequest, machineId =
 /** GET /api/worktree/list: every checkout of the workspace's repository, with the workspace each is open in. */
 export function listWorktrees(workspaceId: string, machineId = "local"): Promise<WorktreeListing> {
   return getJson<WorktreeListing>(`${machinePath(machineId, "worktree/list")}?workspace_id=${encodeURIComponent(workspaceId)}`);
+}
+
+/**
+ * GET /api/worktree/inventory: what listWorktrees answers for each workspace, in one read (at most
+ * MAX_INVENTORY_WORKSPACES). A PC whose bridge is from before it answers 404 not_found (routeMissing).
+ */
+export function readWorktreeInventory(workspaceIds: readonly string[], machineId = "local"): Promise<WorktreeInventory> {
+  return getJson<WorktreeInventory>(`${machinePath(machineId, "worktree/inventory")}?${workspaceIds.map((id) => `workspace_id=${encodeURIComponent(id)}`).join("&")}`);
 }
 
 /** POST /api/worktree/open: an existing checkout as a workspace; the one it already has when it is open. */
@@ -1408,6 +1431,11 @@ export async function fetchPanePlan(paneId: string, machineId = "local"): Promis
 export async function fetchPaneFiles(paneId: string, query: string, limit = 20, machineId = "local"): Promise<string[]> {
   const params = new URLSearchParams({ pane_id: paneId, q: query, limit: String(limit) });
   return (await getJson<{ files: string[] }>(machinePath(machineId, `pane/files?${params.toString()}`))).files;
+}
+
+/** GET /api/pane/docs: the Markdown files under the pane's folder, newest first. */
+export async function fetchPaneDocuments(paneId: string, machineId = "local", signal?: AbortSignal): Promise<PaneDocuments> {
+  return getJson<PaneDocuments>(machinePath(machineId, `pane/docs?pane_id=${encodeURIComponent(paneId)}`), { signal });
 }
 
 /** GET /api/pane/prompt: the agent's interactive menu currently on screen, or null. */

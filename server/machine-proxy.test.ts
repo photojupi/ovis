@@ -13,6 +13,7 @@ const commandsAsked: string[] = [];
 const filesAsked: string[] = [];
 const worktreesAsked: string[] = [];
 const faviconAsked: { search: string; authorization: string | null; cookie: string | null }[] = [];
+const textAsked: { method: string; body: string; authorization: string | null; contentType: string | null }[] = [];
 const diffAsked: { path: string; search: string; authorization: string | null; cookie: string | null; forwarded: string | null }[] = [];
 const remote = Bun.serve({
   port: 0,
@@ -32,13 +33,20 @@ const remote = Bun.serve({
       if (new URL(request.url).searchParams.get("pane_id") === "busy") return Response.json({ error: { code: "file_busy", message: "the skill folders did not answer in time" } }, { status: 503, headers: { "retry-after": "1" } });
       return Response.json({ commands: [{ name: "deploy", description: "SECRET", source: "custom", id: "/work/.commandcode/commands/deploy.md" }] });
     }
-    if (path === "/api/pane/files" || path === "/api/plugin/action") {
+    if (path === "/api/pane/files" || path === "/api/plugin/action" || path === "/api/pane/docs") {
       filesAsked.push(path);
+      if (path === "/api/pane/docs") return Response.json({ root: "/work", documents: [{ path: "SECRET.md", size: 1, modified: "2026-11-01T00:00:00.000Z" }], truncated: false });
       return Response.json(path === "/api/pane/files" ? { files: [".env.SECRET"] } : { log_id: "plugin-log-1", status: "failed", exit_code: 1, output: "SECRET", opened_pane_id: null });
     }
     if (path === "/api/worktree/list") {
       worktreesAsked.push(path);
       return Response.json({ source: { repo_key: "repo" }, worktrees: [{ path: "/work-wt/SECRET", branch: "SECRET", open_workspace_id: null }] });
+    }
+    if (path === "/api/fs/text") {
+      return request.text().then((body) => {
+        textAsked.push({ method: request.method, body, authorization: request.headers.get("authorization"), contentType: request.headers.get("content-type") });
+        return Response.json({ error: { code: "stale_revision", message: "changed", revision: "b".repeat(64) } }, { status: 409 });
+      });
     }
     if (path === "/api/fs/favicon") {
       faviconAsked.push({ search: new URL(request.url).search, authorization: request.headers.get("authorization"), cookie: request.headers.get("cookie") });
@@ -53,7 +61,7 @@ const remote = Bun.serve({
         ? { ...PLAN_CARD, body: "4. The last step that fits the pane." }
         : { ...PLAN_CARD, id: `${PLAN_CARD.id}.0123abcd`, body: "1. A secret step from the plan file.", plan_file: "/home/u/.claude/plans/p.md" }, suggestion: null, restored: null });
     }
-    if (path.startsWith("/api/workspace/diff/")) {
+    if (path.startsWith("/api/workspace/diff/") || path.startsWith("/api/workspace/git/")) {
       diffAsked.push({ path, search: new URL(request.url).search, authorization: request.headers.get("authorization"), cookie: request.headers.get("cookie"), forwarded: request.headers.get("x-forwarded-for") });
       return Response.json({ files: [], total: 0, truncated: false }, { headers: { "set-cookie": "remote=1" } });
     }
@@ -121,6 +129,20 @@ it("never asks a PC for a pane's or a folder's command rows for a watching devic
   expect(commandsAsked).toEqual(["/api/pane/commands"]);
 });
 
+it("carries a save to a PC's file with its body and the PC's credential, and its conflict back, but never for a watching device (#771)", async () => {
+  const body = JSON.stringify({ pane_id: "w1:p1", path: "/work/notes.md", revision: "a".repeat(64), text: "new\n" });
+  const put = (readOnly: boolean) => handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/fs/text", {
+    method: "PUT", body, headers: { origin: "http://127.0.0.1", "x-herdr-machine": "1", "content-type": "application/json" },
+  }), manager, undefined, undefined, readOnly);
+  const watched = await put(true);
+  expect([watched.status, ((await watched.json()) as { error: { code: string } }).error.code]).toEqual([403, "read_only"]);
+  expect(textAsked).toEqual([]);
+  const driven = await put(false);
+  expect(driven.status).toBe(409);
+  expect(await driven.json()).toMatchObject({ error: { code: "stale_revision", revision: "b".repeat(64) } });
+  expect(textAsked).toEqual([{ method: "PUT", body, authorization: "Bearer remote-token", contentType: "application/json" }]);
+});
+
 it("passes on a PC's 503 with its Retry-After, so the menu knows to ask again (#2254)", async () => {
   const busy = await handleMachineRequest(new Request("http://127.0.0.1/api/machines/pc1/pane/commands?pane_id=busy"), manager);
   expect(busy.status).toBe(503);
@@ -130,7 +152,7 @@ it("passes on a PC's 503 with its Retry-After, so the menu knows to ask again (#
 
 it("never asks a PC for the paths under a pane's folder or a plugin run's output for a watching device (#2244)", async () => {
   const base = "http://127.0.0.1/api/machines/pc1";
-  const routes = ["pane/files?pane_id=w1:p1&q=env", "plugin/action?plugin_id=deploy&log_id=plugin-log-1"];
+  const routes = ["pane/files?pane_id=w1:p1&q=env", "plugin/action?plugin_id=deploy&log_id=plugin-log-1", "pane/docs?pane_id=w1:p1"];
   for (const path of routes) {
     const watched = await handleMachineRequest(new Request(`${base}/${path}`), manager, undefined, undefined, true);
     expect([path, watched.status, ((await watched.json()) as { error: { code: string } }).error.code]).toEqual([path, 403, "read_only"]);
@@ -141,7 +163,7 @@ it("never asks a PC for the paths under a pane's folder or a plugin run's output
     const driven = await handleMachineRequest(new Request(`${base}/${path}`), manager);
     expect([path, driven.status, JSON.stringify(await driven.json()).includes("SECRET")]).toEqual([path, 200, true]);
   }
-  expect(filesAsked).toEqual(["/api/pane/files", "/api/plugin/action"]);
+  expect(filesAsked).toEqual(["/api/pane/files", "/api/plugin/action", "/api/pane/docs"]);
 });
 
 it("never asks a PC for a repository's checkouts for a watching device (#2250)", async () => {
@@ -218,11 +240,12 @@ it("refuses a path with an empty segment instead of forwarding it as another rou
   expect(asked.length).toBe(before);
 });
 
-it("forwards a repository diff read with its query and the bridge's own credential, and nothing of the browser's", async () => {
+it("forwards a repository diff or history read with its query and the bridge's own credential, and nothing of the browser's", async () => {
   const before = diffAsked.length;
   const search = "?pane_id=w1%3Ap1&scope=commit&base=HEAD~1&path=dir%20with%20space%2Fa.txt";
-  for (const route of ["files", "file", "refs"]) {
-    const response = await handleMachineRequest(new Request(`http://127.0.0.1/api/machines/pc1/workspace/diff/${route}${search}`, {
+  const routes = ["diff/files", "diff/file", "diff/refs", "git/log", "git/branches", "git/show"];
+  for (const route of routes) {
+    const response = await handleMachineRequest(new Request(`http://127.0.0.1/api/machines/pc1/workspace/${route}${search}`, {
       headers: { cookie: "ovis_token=browser-secret; ovis_device=device-secret", authorization: "Bearer browser-secret", "x-forwarded-for": "203.0.113.9" },
     }), manager);
     expect(response.status).toBe(200);
@@ -230,9 +253,9 @@ it("forwards a repository diff read with its query and the bridge's own credenti
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.json()).toEqual({ files: [], total: 0, truncated: false });
   }
-  expect(diffAsked.slice(before)).toEqual(["files", "file", "refs"].map((route) => ({ path: `/api/workspace/diff/${route}`, search, authorization: "Bearer remote-token", cookie: null, forwarded: null })));
+  expect(diffAsked.slice(before)).toEqual(routes.map((route) => ({ path: `/api/workspace/${route}`, search, authorization: "Bearer remote-token", cookie: null, forwarded: null })));
   // only the three reads are routes: nothing else under that name reaches the PC
-  for (const path of ["workspace/diff", "workspace/diff/file/extra", "workspace/diff/apply", "workspace/diffs/file"]) {
+  for (const path of ["workspace/diff", "workspace/diff/file/extra", "workspace/diff/apply", "workspace/diffs/file", "workspace/git", "workspace/git/log/extra", "workspace/git/checkout"]) {
     const response = await handleMachineRequest(new Request(`http://127.0.0.1/api/machines/pc1/${path}${search}`), manager);
     expect(response.status).toBe(404);
     expect(await response.json()).toMatchObject({ error: { code: "not_found" } });
@@ -240,7 +263,7 @@ it("forwards a repository diff read with its query and the bridge's own credenti
   const crossSite = await handleMachineRequest(new Request(`http://127.0.0.1/api/machines/pc1/workspace/diff/file${search}`, { headers: { "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate" } }), manager);
   expect(crossSite.status).toBe(403);
   expect(await crossSite.json()).toMatchObject({ error: { code: "invalid_origin" } });
-  expect(diffAsked.length).toBe(before + 3);
+  expect(diffAsked.length).toBe(before + routes.length);
 });
 
 it("gives a watching device a PC's plan card without Claude's plan file, even from a PC that ignores the ask", async () => {

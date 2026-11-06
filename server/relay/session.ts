@@ -4,7 +4,7 @@ import type { SecureChannel } from "../../shared/relay-e2ee.ts";
 import { commitmentHolds, fromBase64Url, PAIR_APPROVAL_MS, pairDigits, randomPairNonce, toBase64Url } from "../../shared/relay-pair-sas.ts";
 import { MuxEngine, MuxStreamError } from "../../shared/relay-mux-engine.ts";
 import type { HttpStream, MuxClock, SessionFrame, WsStream } from "../../shared/relay-mux-engine.ts";
-import { ACCOUNT_FEATURE, FrameType, LARGE_WS_MESSAGES, LIMITS_V1, PAIR_INTENT_ACCOUNT, PAIR_INTENT_PC, PAIR_SAS_FEATURE, RELAY_HINTS, RELAY_PROTOCOL, REQUEST_HEADERS, RESPONSE_HEADERS, SERVER_TIME_HEADER, WS_CONTINUATION_CAPACITY } from "../../shared/relay-mux.ts";
+import { ACCOUNT_FEATURE, DIRECT_CARRIER, FrameType, LARGE_WS_MESSAGES, LIMITS_V1, PAIR_INTENT_ACCOUNT, PAIR_INTENT_PC, PAIR_SAS_FEATURE, RELAY_HINTS, RELAY_PROTOCOL, REQUEST_HEADERS, RESPONSE_HEADERS, SERVER_TIME_HEADER, WS_CONTINUATION_CAPACITY } from "../../shared/relay-mux.ts";
 import type { HeaderList, SessionError } from "../../shared/relay-mux.ts";
 import type { PairingIntent } from "../../shared/machines.ts";
 import { PairingRateLimitedError, type DeviceMatch } from "../devices.ts";
@@ -57,6 +57,13 @@ export interface RelaySessionOptions {
   readonly onAuthenticated?: (deviceId: string) => void;
   /** The relays a phone that offered RELAY_HINTS is told in AUTH_OK, the preferred one first. */
   readonly relayHints?: () => readonly string[];
+  /** This PC's direct carriers (server/relay/direct.ts), told in AUTH_OK to a phone that offered DIRECT_CARRIER. */
+  readonly directCarriers?: () => readonly string[];
+  /**
+   * A carrier that came straight to this PC rather than through the relay: devices sign in on it, and
+   * nothing pairs (a code or a comparison), so pairing and its guesses stay on the relay.
+   */
+  readonly signInOnly?: boolean;
 }
 
 export interface RelayWebSocketRequest {
@@ -83,7 +90,7 @@ export class RelaySession {
   /** A pairing by comparing digits under way; `ended` once it made a device or counted as a failure. */
   private sas: {
     label: string; publicKey: string; commitment: Uint8Array; pcNonce: Uint8Array; expiresAt: number;
-    phoneConfirmed: boolean; approved: boolean; approvedBy?: string; ended: boolean; membersOnly: boolean; withdraw?: () => void; cancelDeadline?: () => void; stopRevokeAll?: () => void; stopApprover?: () => void;
+    phoneConfirmed: boolean; approved: boolean; approvedBy?: string; ended: boolean; membersOnly: boolean; localOnly: boolean; withdraw?: () => void; cancelDeadline?: () => void; stopRevokeAll?: () => void; stopApprover?: () => void;
   } | undefined;
   private device: DeviceMatch | undefined;
   /** The key this session's device signed in or paired with: a `link` must start from it (docs/account.md). */
@@ -91,6 +98,8 @@ export class RelaySession {
   /** Whether the device signed in with AUTH, the only admission that proves it holds its key. */
   private keyProven = false;
   private hinting = false;
+  /** the phone offered DIRECT_CARRIER and this PC has carriers to name */
+  private directing = false;
   /** the phone offered SERVER_TIME_HEADER: one that did not refuses the header */
   private serverTime = false;
   private unwatch: (() => void) | undefined;
@@ -229,9 +238,10 @@ export class RelaySession {
         if (this.state !== "hello") { this.close("protocol_error"); return; }
         if (!frame.payload.versions.includes(1)) { this.close("unsupported_version"); return; }
         // selected only where it can finish: a protected channel to bind the digits to
-        if (frame.payload.features.includes(PAIR_SAS_FEATURE)) this.sasBinding = channelBinding(this.options.channel);
+        if (frame.payload.features.includes(PAIR_SAS_FEATURE) && !this.options.signInOnly) this.sasBinding = channelBinding(this.options.channel);
         // relay hints are answered in AUTH_OK, not WELCOME: a provisional WELCOME goes out before HELLO is read
         this.hinting = this.options.relayHints !== undefined && frame.payload.features.includes(RELAY_HINTS);
+        this.directing = this.options.directCarriers !== undefined && frame.payload.features.includes(DIRECT_CARRIER);
         // a large session's snapshot goes in one message only to a phone that takes it (#2773)
         const large = frame.payload.features.includes(LARGE_WS_MESSAGES);
         if (large) this.mux.sendLargeMessages();
@@ -241,7 +251,7 @@ export class RelaySession {
         if (intents.length > 1) { this.close("protocol_error"); return; }
         const selected = [...this.sasBinding ? [PAIR_SAS_FEATURE, ...intents] : [], ...frame.payload.features.includes(ACCOUNT_FEATURE) ? [ACCOUNT_FEATURE] : []];
         // a feature the phone requires has to be one this PC takes on this channel
-        if (frame.payload.required_features.some((feature) => !selected.includes(feature) && !(feature === RELAY_HINTS && this.hinting) && !(feature === LARGE_WS_MESSAGES && large))) { this.close("unsupported_extension"); return; }
+        if (frame.payload.required_features.some((feature) => !selected.includes(feature) && !(feature === RELAY_HINTS && this.hinting) && !(feature === DIRECT_CARRIER && this.directing) && !(feature === LARGE_WS_MESSAGES && large))) { this.close("unsupported_extension"); return; }
         this.state = "auth";
         if (this.sasBinding && intents[0] === PAIR_INTENT_ACCOUNT) this.intent = "account";
         // after a provisional WELCOME (nothing selected), another goes out only when this one selects something
@@ -249,6 +259,8 @@ export class RelaySession {
         return;
       case FrameType.AUTH: case FrameType.PAIR: {
         if (this.state !== "auth") { this.close("protocol_error"); return; }
+        // refused before the code is looked at: nothing is spent or counted
+        if (frame.type === FrameType.PAIR && this.options.signInOnly) { this.close("auth_failed"); return; }
         this.state = "verifying";
         const devices = this.options.services.devices;
         if (this.options.services.serveOnly) { this.close("auth_failed"); return; }
@@ -260,11 +272,15 @@ export class RelaySession {
         return;
       }
       case FrameType.PAIR_REQUEST: {
+        // a direct carrier pairs nothing, whatever was offered: refused as a sign-in failure, before the binding is looked at
+        if (this.options.signInOnly) { this.close("auth_failed"); return; }
         if (this.state !== "auth" || !this.sasBinding) { this.close("protocol_error"); return; }
         if (this.options.services.serveOnly) { this.close("auth_failed"); return; }
         // nobody asked for a link lately: refused before any prompt, and not counted, since no person was asked,
         // unless it is an account join the account service has seen (accountJoin, docs/account.md design 5.3)
         let membersOnly = false;
+        // taken under the PC's own add-me screen: this comparison stays the PC's to decide, whenever its digits show
+        const localOnly = this.options.services.relay.approvals.localOnlyOpen();
         if (!this.options.services.relay.approvals.windowOpen()) {
           this.state = "verifying";
           if (!await this.accountJoin(frame.payload.public_key)) { this.close("auth_failed"); return; }
@@ -275,7 +291,7 @@ export class RelaySession {
         this.state = "pair-commit";
         this.sas = {
           label: frame.payload.label, publicKey: frame.payload.public_key, commitment: fromBase64Url(frame.payload.commitment),
-          pcNonce: randomPairNonce(), expiresAt: Date.now() + PAIR_APPROVAL_MS, phoneConfirmed: false, approved: false, ended: false, membersOnly,
+          pcNonce: randomPairNonce(), expiresAt: Date.now() + PAIR_APPROVAL_MS, phoneConfirmed: false, approved: false, ended: false, membersOnly, localOnly,
         };
         // past the comparison's deadline the session ends with `timeout` and its prompt goes at once;
         // the mux's own setup deadline stays just behind it as the backstop
@@ -295,7 +311,7 @@ export class RelaySession {
         this.options.services.devices.assertRelayPairing(this.path);
         const asked = this.options.services.relay.approvals.ask(sas.label,
           pairDigits(this.sasBinding, sas.publicKey, phoneNonce, sas.pcNonce), sas.expiresAt,
-          { intent: this.intent, key: sas.publicKey, deviceId: accountDeviceId(this.options.serverId, sas.publicKey), membersOnly: sas.membersOnly });
+          { intent: this.intent, key: sas.publicKey, deviceId: accountDeviceId(this.options.serverId, sas.publicKey), membersOnly: sas.membersOnly, localOnly: sas.localOnly });
         if (!asked) { this.close("auth_failed"); return; }
         this.state = "pair-wait";
         sas.withdraw = asked.withdraw;
@@ -321,9 +337,10 @@ export class RelaySession {
     }
   }
 
-  private hints(): { relays?: readonly string[] } {
+  private hints(): { relays?: readonly string[]; direct?: readonly string[] } {
     const relays = this.hinting ? this.options.relayHints?.() ?? [] : [];
-    return relays.length ? { relays } : {};
+    const direct = this.directing ? this.options.directCarriers?.() ?? [] : [];
+    return { ...relays.length ? { relays } : {}, ...direct.length ? { direct } : {} };
   }
 
   /** Both people said the digits match: the phone on its screen, the owner on this PC. */
@@ -333,6 +350,9 @@ export class RelaySession {
     // an answer that lands after the deadline, before its timer ran, makes no device either
     if (Date.now() > sas.expiresAt) { this.close("timeout"); return; }
     this.state = "verifying";
+    // a member's remote approval never lets in a key this PC holds back (removed elsewhere, or a remove for it waits here);
+    // only a pairing approved on this PC itself does
+    if (sas.approvedBy !== undefined && this.options.services.accountMailbox.gates().held(sas.publicKey)) { this.close("auth_failed"); return; }
     let device: DeviceMatch | undefined;
     try { device = this.options.services.devices.pairRelayApproved(sas.label, sas.publicKey, { path: this.path, id: accountDeviceId(this.options.serverId, sas.publicKey), ...(sas.approvedBy === undefined ? {} : { addedBy: sas.approvedBy }) })?.device; }
     catch (error) {

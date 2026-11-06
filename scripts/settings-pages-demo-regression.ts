@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,12 +7,12 @@ import { chromium, type Page } from "playwright-core";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp, buildDevelopmentDemoApp } from "./demo-build.ts";
 import { DEMO_FILE_PREVIEW_SCRIPT } from "./demo-file-preview.ts";
-import { openSettingsPage, sheetRisen } from "./settings-page.ts";
+import { openSettingsFolds, openSettingsPage, sheetRisen, themeSide } from "./settings-page.ts";
 import { KO } from "../src/lib/i18n.ko.ts";
 import { JA } from "../src/lib/i18n.ja.ts";
 import { ZH } from "../src/lib/i18n.zh.ts";
-import { terminalTheme } from "../src/lib/settings.ts";
-import { THEME_IDS, type ThemeId } from "../src/lib/themes.ts";
+import { DEFAULT_SETTINGS, terminalTheme } from "../src/lib/settings.ts";
+import { rowFor, THEME_IDS, type ThemeId } from "../src/lib/themes.ts";
 import baseline from "../src/lib/themes.legacy-baseline.json";
 import { comboKey, LEGACY_COMBOS } from "./theme-baseline.ts";
 
@@ -20,7 +21,7 @@ import { comboKey, LEGACY_COMBOS } from "./theme-baseline.ts";
 // HTTP traffic stay in this disposable, loopback-only app; no herdr session is opened.
 const app = mkdtempSync(join(tmpdir(), "herdr-settings-demo-"));
 const devApp = mkdtempSync(join(tmpdir(), "herdr-settings-dev-"));
-const PAGES = ["Appearance", "Chat", "Terminal", "Alerts", "Voice input", "Agents", "Shortcuts", "Phone & devices", "Remote PCs", "About"];
+const PAGES = ["Appearance", "Chat", "Terminal", "Alerts", "Agents", "Shortcuts", "Devices and PCs", "Experimental", "About"];
 const SETTINGS = { language: "en", showUsage: true, voiceInput: true, showQuickReplies: true, fileOpen: "panel" };
 
 const dialogOf = (page: Page) => page.getByRole("dialog", { name: "Settings", exact: true });
@@ -50,11 +51,13 @@ const historyHolds = async (page: Page, step: string, holds: () => boolean): Pro
 /** Controls and text that reach past their card, and cards past the page's box: a row wider than its card is cut there. */
 const cutOff = (page: Page): Promise<string[]> => page.locator(".settings-body:not([hidden]), .settings-key-bar-body").evaluate((body) => {
   const edge = body.getBoundingClientRect();
-  const out = [...body.querySelectorAll<HTMLElement>("button, input, select, a, .settings-card, .settings-row")]
+  const out = [...body.querySelectorAll<HTMLElement>("button, input, select, a, .settings-card, .settings-row, .theme-cards")]
     .filter((node) => {
       const box = node.getBoundingClientRect();
       // a control is held by its card, where it has one; a card by the page
       const card = node.classList.contains("settings-card") ? null : node.closest<HTMLElement>(".settings-card");
+      // a theme card is held by the row of cards that scrolls sideways on purpose; the row itself is checked against its card
+      if (!node.classList.contains("theme-cards") && node.closest(".theme-cards")) return false;
       const within = card ? card.getBoundingClientRect() : edge;
       return box.width > 0 && (box.right > within.right + 0.5 || box.left < within.left - 0.5);
     })
@@ -67,49 +70,48 @@ const MATRIX: readonly (readonly ["en" | "ko" | "ja" | "zh", string, string, str
   ["en", "theme", "appearance", "-"],
   ["en", "palette", "appearance", "-"],
   ["en", "interface font size", "appearance", "typography"],
-  ["en", "chat font size", "chat", "-"],
+  ["en", "chat font size", "appearance", "typography"],
   ["en", "chat width", "chat", "-"],
   ["en", "Enter sends", "chat", "composer"],
   ["en", "quick replies", "chat", "quick-replies"],
-  ["en", "terminal font", "terminal", "-"],
+  ["en", "terminal font", "appearance", "typography"],
   ["en", "notifications", "alerts", "-"],
   ["en", "shortcuts", "shortcuts", "-"],
   ["en", "phone", "devices", "-"],
-  ["en", "OpenAI API key", "voice", "openai-key"],
+  ["en", "OpenAI API key", "chat", "openai-key"],
   ["en", "Return inserts a new line", "chat", "composer"],
-  ["en", "Send queued messages automatically", "chat", "composer"],
-  ["en", "New tab button", "chat", "composer"],
+  ["en", "Send queued messages automatically", "chat", "composer-more"],
   ["en", "Suggestion chip", "chat", "composer"],
   ["en", "Show above the message box", "chat", "quick-replies"],
   ["ko", "인터페이스 글자 크기", "appearance", "typography"],
-  ["ko", "채팅 글자 크기", "chat", "-"],
+  ["ko", "채팅 글자 크기", "appearance", "typography"],
   ["ko", "Enter로 보내기", "chat", "composer"],
   ["ko", "빠른 답장", "chat", "quick-replies"],
-  ["ko", "터미널 글자 크기", "terminal", "-"],
-  ["ko", "OpenAI API 키", "voice", "openai-key"],
+  ["ko", "터미널 글자 크기", "appearance", "typography"],
+  ["ko", "OpenAI API 키", "chat", "openai-key"],
   ["ko", "단축키", "shortcuts", "-"],
   ["ko", "알림", "alerts", "-"],
-  ["ko", "대기 메시지 자동 전송", "chat", "composer"],
+  ["ko", "대기 메시지 자동 전송", "chat", "composer-more"],
   ["ko", "입력창 위에 표시", "chat", "quick-replies"],
   ["ja", "インターフェースの文字サイズ", "appearance", "typography"],
-  ["ja", "チャットのフォントサイズ", "chat", "-"],
+  ["ja", "チャットのフォントサイズ", "appearance", "typography"],
   ["ja", "Enter で送信", "chat", "composer"],
   ["ja", "クイック返信", "chat", "quick-replies"],
-  ["ja", "ターミナルのフォントサイズ", "terminal", "-"],
-  ["ja", "OpenAI API キー", "voice", "openai-key"],
+  ["ja", "ターミナルのフォントサイズ", "appearance", "typography"],
+  ["ja", "OpenAI API キー", "chat", "openai-key"],
   ["ja", "ショートカット", "shortcuts", "-"],
   ["ja", "通知", "alerts", "-"],
-  ["ja", "送信待ちメッセージを自動で送信", "chat", "composer"],
+  ["ja", "送信待ちメッセージを自動で送信", "chat", "composer-more"],
   ["ja", "入力欄の上に表示", "chat", "quick-replies"],
   ["zh", "界面字号", "appearance", "typography"],
-  ["zh", "聊天字号", "chat", "-"],
+  ["zh", "聊天字号", "appearance", "typography"],
   ["zh", "按 Enter 发送", "chat", "composer"],
   ["zh", "快捷回复", "chat", "quick-replies"],
-  ["zh", "终端字号", "terminal", "-"],
-  ["zh", "OpenAI API 密钥", "voice", "openai-key"],
+  ["zh", "终端字号", "appearance", "typography"],
+  ["zh", "OpenAI API 密钥", "chat", "openai-key"],
   ["zh", "快捷键", "shortcuts", "-"],
   ["zh", "提醒", "alerts", "-"],
-  ["zh", "自动发送排队消息", "chat", "composer"],
+  ["zh", "自动发送排队消息", "chat", "composer-more"],
   ["zh", "显示在输入框上方", "chat", "quick-replies"],
 ];
 
@@ -146,7 +148,7 @@ const landing = async (page: Page, label: (name: string) => string): Promise<{ p
   return { page: id, section, visible };
   });
   // the panel is named by its page's label in the language shown: back to the page's id
-  const ids = ["appearance", "chat", "terminal", "alerts", "voice", "agents", "shortcuts", "devices", "remote", "about"];
+  const ids = ["appearance", "chat", "terminal", "alerts", "agents", "shortcuts", "devices", "about"];
   return { ...shown, page: shown.page === null ? null : ids[PAGES.findIndex((name) => label(name) === shown.page)] ?? `unknown: ${shown.page}` };
 };
 /** Anything in the palette or Settings wider than the window: a long query or label must not push the sheet sideways. */
@@ -384,7 +386,8 @@ interface HeldVoice { voiceAsked: () => number; releaseVoice: () => void; groupO
  * they scrolled.
  */
 async function heldGroupLanding(browser: import("playwright-core").Browser, url: string): Promise<void> {
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, locale: "en" });
+  // short enough that the OpenAI key's group starts below the fold, so a landing has to scroll to it
+  const context = await browser.newContext({ viewport: { width: 390, height: 480 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, locale: "en" });
   try {
     await context.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), JSON.stringify(SETTINGS));
     const page = await context.newPage();
@@ -456,6 +459,546 @@ const checkSelectArrows = async (page: Page): Promise<void> => {
   }
 };
 
+/**
+ * Settings' own search, at 1440 and 390: the settings of every page that hold all the words typed,
+ * each under its page's name and changed right there; a group named by the words shows its settings;
+ * a page's name opens it; no match says so; and Escape empties the search before it closes Settings.
+ */
+async function dialogSearch(browser: import("playwright-core").Browser, url: string): Promise<void> {
+  for (const width of [1440, 390] as const) {
+    const context = await browser.newContext(width === 390 ? { viewport: { width, height: 844 }, isMobile: true, hasTouch: true, locale: "en" } : { viewport: { width, height: 900 }, locale: "en" });
+    try {
+      await context.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), JSON.stringify(SETTINGS));
+      const page = await context.newPage();
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto(url);
+      await page.locator(".conn-live").waitFor({ state: "attached" });
+      await openSettings(page);
+      const dialog = dialogOf(page);
+      const search = dialog.getByRole("searchbox", { name: "Search settings", exact: true });
+      const results = dialog.getByRole("region", { name: "Search results", exact: true });
+      // the pages drawn with what each shows: its name and the labels of the settings in sight
+      const shown = () => results.evaluate((region) => [...region.querySelectorAll<HTMLElement>(".settings-search-page")].filter((section) => section.checkVisibility())
+        .map((section) => [section.getAttribute("aria-label"), [...section.querySelectorAll<HTMLElement>("[data-setting]")].filter((row) => row.checkVisibility()).map((row) => row.querySelector(".settings-label")?.textContent ?? "")] as const));
+
+      await search.fill("Font SIZE");
+      const found = await shown();
+      // every font row is on Appearance: the terminal's and the chat's are found by their sizes' words
+      assert.deepEqual(found.map(([name]) => name), ["Appearance"], `${width}px: "font size" finds settings on Appearance only`);
+      for (const [name, label] of [["Appearance", "Interface font size"], ["Appearance", "Chat font"], ["Appearance", "Terminal font"]] as const) {
+        assert.ok(found.find(([page]) => page === name)?.[1].includes(label), `${width}px: ${label} is found under ${name}`);
+      }
+      assert.equal(await dialog.getByRole("tablist").isVisible(), width !== 390, `${width}px: a phone's results take the list's place`);
+
+      // a setting found is changed where it is shown
+      await results.getByRole("button", { name: "Increase terminal font size", exact: true }).click();
+      await page.waitForFunction(() => JSON.parse(localStorage.getItem("ovis:settings") ?? "{}").terminalFontSize === 14);
+      assert.equal(await results.getByRole("group", { name: "Terminal font size", exact: true }).locator("output").textContent(), "14px");
+
+      // a group named by the words shows each of its settings, and one with a form but no setting row shows the form
+      await search.fill("quick replies");
+      assert.deepEqual(await shown(), [["Chat", ["Show above the message box"]]], `${width}px: the Quick replies group's setting is found by the group's name`);
+      await search.fill("openai api key");
+      await results.locator('input[aria-label="OpenAI API key"]').waitFor();
+
+      // Escape empties a search from a result too, not only from the field
+      await search.fill("sound");
+      await results.getByRole("switch", { name: "Sound", exact: true }).focus();
+      await page.keyboard.press("Escape");
+      assert.equal(await search.inputValue(), "", `${width}px: Escape on a result empties the search`);
+      assert.equal(await search.evaluate((field) => field === document.activeElement), true, `${width}px: the field takes the focus back`);
+
+      // a row a found row opens is found with it: Custom from a description match shows its field
+      await search.fill("menus dialogs");
+      await results.getByRole("combobox", { name: "Interface font", exact: true }).selectOption("custom");
+      await results.getByRole("textbox", { name: "Custom interface font", exact: true }).waitFor();
+      await results.getByRole("combobox", { name: "Interface font", exact: true }).selectOption("default");
+      assert.equal(await page.locator(".settings-dialog").count(), 1, `${width}px: and keeps Settings open`);
+
+      // the key bar editor opened from a search sits over the Terminal page: Back steps out to it, not out of Settings
+      if (width === 390) {
+        await search.fill("key bar");
+        await results.getByRole("button", { name: "Edit key bar", exact: true }).click();
+        await page.getByRole("dialog", { name: "Key bar", exact: true }).waitFor();
+        await historyHolds(page, "the key bar opened from a search", () => (history.state as { "ovis:settings"?: { page: string | null; keyBar: boolean } } | null)?.["ovis:settings"]?.keyBar === true);
+        await page.goBack();
+        await dialog.getByRole("tabpanel", { name: "Terminal", exact: true }).waitFor();
+        await page.goBack();
+        await dialog.getByRole("tablist").waitFor();
+        assert.equal(await page.locator(".settings-dialog").count(), 1, "390px: Back from the key bar opened by a search leaves Settings open");
+      }
+
+      await search.fill("zzqxv nothing");
+      await dialog.getByRole("status").filter({ hasText: "No settings match." }).waitFor();
+      assert.deepEqual(await shown(), [], `${width}px: no page is drawn when nothing matches`);
+
+      // the first Escape empties the search and keeps Settings; the next one closes it
+      await search.press("Escape");
+      assert.equal(await search.inputValue(), "");
+      assert.equal(await results.count(), 0);
+      assert.equal(await dialog.getByRole("tablist").isVisible(), true, `${width}px: the list of pages is back`);
+      assert.equal(await page.locator(".settings-dialog").count(), 1, `${width}px: Escape on a search does not close Settings`);
+
+      // a page's name opens the page and ends the search
+      await search.fill("sound");
+      await results.getByRole("button", { name: "Open Alerts", exact: true }).click();
+      await dialog.getByRole("tabpanel", { name: "Alerts", exact: true }).waitFor();
+      assert.equal(await search.count() === 0 || await search.inputValue() === "", true, `${width}px: opening a page ends the search`);
+      if (width === 1440) {
+        await search.press("Escape");
+        await page.locator(".settings-dialog").waitFor({ state: "detached" });
+      }
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  }
+  console.log("PASS Settings' search at 1440 and 390px: settings of every page found and changed in place, groups by name, pages opened, nothing matching said, Escape empties first");
+}
+
+/**
+ * The folded part of a page (SettingsFold), at 1440 and 390: closed on opening, with the count of what this
+ * device changed in it on its line; a link to a group inside opens it on that group; a search finds its rows.
+ */
+async function foldedGroups(browser: import("playwright-core").Browser, url: string): Promise<void> {
+  for (const width of [1440, 390] as const) {
+    const context = await browser.newContext(width === 390 ? { viewport: { width, height: 844 }, isMobile: true, hasTouch: true, locale: "en" } : { viewport: { width, height: 900 }, locale: "en" });
+    try {
+      await context.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), JSON.stringify({ ...SETTINGS, sidebarPeek: true }));
+      const page = await context.newPage();
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto(url);
+      await page.locator(".conn-live").waitFor({ state: "attached" });
+      await openSettings(page);
+      const dialog = dialogOf(page);
+      await dialog.getByRole("tab", { name: "Appearance", exact: true }).click();
+      const panel = dialog.getByRole("tabpanel", { name: "Appearance", exact: true });
+      const more = panel.locator("details.settings-fold[data-fold='more']");
+      assert.equal(await more.evaluate((fold) => (fold as HTMLDetailsElement).open), false, `${width}px: More settings starts folded`);
+      assert.equal(await panel.getByRole("switch", { name: "Show the sidebar on hover", exact: true }).isVisible(), false, `${width}px: its rows are out of the first view`);
+      assert.equal(await more.locator(".settings-fold-changed").textContent(), "1 changed", `${width}px: the line counts what this device changed inside`);
+      await more.locator("> summary").click();
+      await panel.getByRole("switch", { name: "Show the sidebar on hover", exact: true }).waitFor();
+
+      // a search finds a folded row with the rest
+      await closeSettings(page);
+      await openSettings(page);
+      await dialog.getByRole("searchbox", { name: "Search settings", exact: true }).fill("sidebar on hover");
+      await dialog.getByRole("region", { name: "Search results", exact: true }).getByRole("switch", { name: "Show the sidebar on hover", exact: true }).waitFor();
+      // an agent's own setting is found with its agent's row shut, in a group named after it
+      await dialog.getByRole("searchbox", { name: "Search settings", exact: true }).fill("sandbox");
+      await dialog.getByRole("region", { name: "Search results", exact: true }).getByLabel("Sandbox and approvals", { exact: true }).waitFor();
+      // Model and Effort are alike for every agent: each found group says whose it is
+      await dialog.getByRole("searchbox", { name: "Search settings", exact: true }).fill("effort");
+      const found = dialog.getByRole("region", { name: "Search results", exact: true });
+      await found.locator("[data-section='agent-codex']").waitFor();
+      assert.deepEqual(await found.locator("[data-section='agent-claude'] > h3, [data-section='agent-codex'] > h3").allTextContents(), ["Claude Code", "Codex"], `${width}px: a found agent's rows sit under its name`);
+      await closeSettings(page);
+
+      // an old link to the Chat page's folded Chat group lands on Conversation, where its row went
+      await page.goto(`${url}?settings=chat&section=chat-more`);
+      await page.getByRole("switch", { name: "Collapse work", exact: true }).waitFor();
+      assert.equal(await page.locator(".settings-body:not([hidden]) [data-section='conversation']").evaluate((group) => document.activeElement === group), true, `${width}px: chat-more lands on Conversation`);
+      await closeSettings(page);
+
+      // a link to a group inside a fold opens it on that group
+      await page.goto(`${url}?settings=chat&section=composer-more`);
+      const queued = page.getByRole("switch", { name: "Send queued messages automatically", exact: true });
+      await queued.waitFor();
+      assert.equal(await page.locator(".settings-body:not([hidden]) [data-section='composer-more']").evaluate((group) => group.closest("details")?.open === true && document.activeElement === group), true, `${width}px: the link opened the fold and focused its group`);
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  }
+  console.log("PASS folded groups at 1440 and 390px: closed on opening with a count of what changed, opened by a click, a link to a group inside and a search");
+}
+
+/**
+ * The three merged rows keep both settings each stands for: Agents order's By state groups this device's list
+ * (and shows Within a state), Show thinking's Expanded opens reasoning, and Tidy dictated text's Terminal tidies
+ * the terminal alone; each choice is kept through a reload.
+ */
+/**
+ * Signed in on a PC's own page, Settings > Devices and PCs lists the account's PCs in My devices, one
+ * row each with a hairline under it and a PC pill, after this PC; the Account group lists none of its own. The sign-in is a fixture in this page's IndexedDB and the account service a route
+ * of this context: nothing reaches GitHub or account.ovis.sh.
+ */
+/**
+ * About's first line names the runtime this PC serves with its version. With herdr's TUI and the
+ * Herdr app's core both installed (`?demo_runtime=both`) it is a choice between them, and picking
+ * the other asks before switching; with one installed it is a plain fact.
+ */
+async function runtimeInUse(browser: import("playwright-core").Browser, url: string): Promise<void> {
+  for (const width of [390, 1280]) {
+    const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 800 }, isMobile: width === 390, hasTouch: width === 390, locale: "en" });
+    try {
+      await context.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), JSON.stringify(SETTINGS));
+      const page = await context.newPage();
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto(`${url}?settings=about`);
+      const panel = dialogOf(page).getByRole("tabpanel", { name: "About", exact: true });
+      const row = panel.locator(".settings-row").filter({ hasText: "In use" });
+      await row.getByText("herdr 0.9.0", { exact: true }).waitFor();
+      assert.equal(await row.getByRole("group", { name: "In use" }).count(), 0, `${width}px: one runtime installed, no switch`);
+      await page.goto(`${url}?demo_runtime=both&settings=about`);
+      const choice = row.getByRole("group", { name: "In use" });
+      await choice.getByRole("button", { name: "herdr-core 0.1.17", exact: true }).waitFor();
+      assert.equal(await choice.getByRole("button", { name: "herdr 0.9.0", exact: true }).getAttribute("aria-pressed"), "true", `${width}px: the runtime served is the one pressed`);
+      await choice.getByRole("button", { name: "herdr-core 0.1.17", exact: true }).click();
+      const confirm = page.getByRole("alertdialog", { name: "Show the Herdr app's terminals?" });
+      await confirm.waitFor();
+      await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+      await confirm.waitFor({ state: "detached" });
+      assert.equal(await choice.getByRole("button", { name: "herdr 0.9.0", exact: true }).getAttribute("aria-pressed"), "true", `${width}px: cancelled, nothing switched`);
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  }
+  console.log("PASS About names the runtime in use, and offers the switch only with two installed, asking first");
+}
+
+/**
+ * About after an update: its compact Updates line keeps the notes of what the update brought (the
+ * header's "What's new" opens them), the section's name and the running version.
+ */
+async function installedNotes(browser: import("playwright-core").Browser, url: string): Promise<void> {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en" });
+  try {
+    await context.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), JSON.stringify(SETTINGS));
+    // the demo's transport answers /api in the page: these two answers go in over it. The running
+    // revision is the build's own, so the app reads no reload and the notes are this release's.
+    await context.addInitScript((revision) => {
+      const answers: Record<string, unknown> = {
+        "/api/updates": { managed: true, auto_update: false, phase: "idle", current_revision: revision, latest_revision: null, current_version: null, latest_version: null, available: false, checked_at: "2099-01-01T00:00:00Z", blocked_reason: null, error: null },
+        "/api/updates/installed": { revision, version: "99.0.0", previous_version: "98.0.0", installed_at: "2099-01-01T00:00:00Z", omitted: 0, releases: [{ version: "99.0.0", date: "2099-01-01", notes: "- A fixture release note." }] },
+      };
+      let inner = window.fetch;
+      const outer: typeof window.fetch = (input, init) => {
+        // the demo app is served under a path of its own: its requests end in the API's path
+        const path = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href).pathname;
+        const answer = Object.keys(answers).find((key) => path.endsWith(key));
+        return answer !== undefined ? Promise.resolve(new Response(JSON.stringify(answers[answer]), { headers: { "content-type": "application/json" } })) : inner(input, init);
+      };
+      // the transport's own assignment goes under these answers; a later wrapper (the file preview's)
+      // reads them as its fetch and replaces the property as a plain value
+      Object.defineProperty(window, "fetch", { configurable: true, get: () => outer, set: (next: typeof window.fetch) => {
+        inner = next;
+        Object.defineProperty(window, "fetch", { configurable: true, writable: true, value: outer });
+      } });
+    }, execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim());
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(`${url}?settings=about`);
+    const panel = dialogOf(page).getByRole("tabpanel", { name: "About", exact: true });
+    await panel.getByRole("region", { name: "What the last update brought", exact: true }).getByText("A fixture release note.").waitFor();
+    assert.equal(await panel.getByRole("heading", { name: "Updates", exact: true }).count(), 1, "the Updates section keeps its name");
+    await panel.getByText(/^Running v/).waitFor();
+    assert.deepEqual(errors, []);
+  } finally {
+    await context.close();
+  }
+  console.log("PASS About's compact Updates line keeps what the last update brought, its name and the running version");
+}
+
+/**
+ * Alerts' one line of chips: Any turn finished lights Long turn finished too, and the row's ↺ puts
+ * back all five, the two kept in the alert filters' own store included.
+ */
+async function alertChipsReset(browser: import("playwright-core").Browser, url: string): Promise<void> {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en" });
+  try {
+    await context.addInitScript((settings) => {
+      localStorage.setItem("ovis:settings", settings);
+      localStorage.setItem("ovis:alert-filters", JSON.stringify({ permission: false, error: true, pcsOff: [] }));
+    }, JSON.stringify({ ...SETTINGS, alertDone: "always" }));
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(`${url}?settings=alerts`);
+    const chips = dialogOf(page).getByRole("group", { name: "Alert me when", exact: true });
+    const pressed = async () => Object.fromEntries(await Promise.all(["Needs input", "Needs permission", "Long turn finished", "Any turn finished", "Stopped on an error"]
+      .map(async (name) => [name, await chips.getByRole("button", { name, exact: true }).getAttribute("aria-pressed")])));
+    await chips.waitFor();
+    assert.deepEqual(await pressed(), { "Needs input": "true", "Needs permission": "false", "Long turn finished": "true", "Any turn finished": "true", "Stopped on an error": "true" }, "every turn lights the long turns too");
+    await dialogOf(page).getByRole("button", { name: "Restore defaults: Alert me when", exact: true }).click();
+    await dialogOf(page).getByRole("button", { name: "Restore defaults: Alert me when", exact: true }).waitFor({ state: "detached" });
+    assert.deepEqual(await pressed(), { "Needs input": "true", "Needs permission": "true", "Long turn finished": "true", "Any turn finished": "false", "Stopped on an error": "false" }, "↺ puts back all five");
+    assert.deepEqual(errors, []);
+  } finally {
+    await context.close();
+  }
+  console.log("PASS Alerts' chips: every turn lights the long turns, and ↺ restores all five");
+}
+
+async function accountPcList(browser: import("playwright-core").Browser, url: string): Promise<void> {
+  const service = "https://account.ovis.sh";
+  for (const [width, theme] of [[390, "light"], [390, "dark"], [1280, "light"], [1280, "dark"]] as const) {
+    const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 800 }, isMobile: width === 390, hasTouch: width === 390, locale: "en" });
+    try {
+      await context.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), JSON.stringify({ ...SETTINGS, theme }));
+      // the PC's server names the account service its page signs in with (server/static.ts)
+      await context.route((address) => address.href.startsWith(url) && (address.pathname.endsWith("/") || address.pathname.endsWith("/index.html")), async (route) => {
+        const response = await route.fetch();
+        await route.fulfill({ response, body: (await response.text()).replace("</head>", `<meta name="ovis-pc-account-service" content="${service}" />\n</head>`) });
+      });
+      await context.route(`${service}/**`, (route) => {
+        const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, content-type", "access-control-allow-methods": "GET, POST, PUT, DELETE" };
+        if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
+        if (new URL(route.request().url()).pathname !== "/v1/pcs") return route.fulfill({ status: 404, headers: cors, json: { error: { code: "not_found" } } });
+        return route.fulfill({ headers: cors, json: { pcs: [
+          { server_id: "a".repeat(32), label: "home-server", added_at: "2026-11-01T00:00:00Z", last_seen_at: new Date().toISOString() },
+          { server_id: "b".repeat(32), label: "office-mac", added_at: "2026-11-01T00:00:00Z", last_seen_at: "2026-11-01T00:00:00Z" },
+        ] } });
+      });
+      const page = await context.newPage();
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto(url);
+      await page.locator(".conn-live").waitFor({ state: "attached" });
+      await page.evaluate((service) => new Promise<void>((resolve, reject) => {
+        const request = indexedDB.open("ovis-account", 1);
+        request.onupgradeneeded = () => { request.result.createObjectStore("account"); };
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const tx = request.result.transaction("account", "readwrite");
+          tx.objectStore("account").put({ service, account: "fixture", provider: "github", access_token: "fixture-access", refresh_token: "fixture-refresh", expires_at: Date.now() + 3_600_000 }, "session");
+          tx.oncomplete = () => { request.result.close(); resolve(); };
+          tx.onabort = () => reject(tx.error);
+        };
+      }), service);
+      await openSettings(page);
+      await openSettingsPage(page, "Devices and PCs");
+      const list = page.locator("[data-section='devices'] .my-pcs");
+      const accountRows = list.locator(".devices-row").filter({ hasText: /home-server|office-mac/ });
+      await accountRows.nth(1).waitFor();
+      assert.deepEqual(await accountRows.locator(".devices-kind").allTextContents(), ["PC", "PC"], `each account PC is marked PC (${width}px, ${theme})`);
+      const style = await list.evaluate((node) => {
+        const row = node.querySelector(".devices-row:not([data-testid='this-pc'])")!;
+        return { listStyle: getComputedStyle(node).listStyleType, display: getComputedStyle(row).display, border: getComputedStyle(row).borderBottomStyle };
+      });
+      assert.deepEqual(style, { listStyle: "none", display: "flex", border: "solid" }, `the account's PCs are styled rows in My devices (${width}px, ${theme})`);
+      assert.equal(await page.locator("[data-section='account'] .relay-shell-pcs").count(), 0, "the Account group does not list the PCs a second time");
+      if (process.env.UI_EVIDENCE_DIR) {
+        await list.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `account-pcs-${width}-${theme}.png`), animations: "disabled" });
+      }
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+    }
+  }
+  console.log("PASS the account's PCs are styled rows of My devices at 390 and 1280px, light and dark");
+}
+
+/**
+ * Continue with Google on a PC's own page: the button shows under GitHub's only while the account
+ * service lists Google for a PC's page (`GET /v1/providers`), and once signed in the Account group
+ * lists the account's ways to sign in, with Remove on every one but the one this page signed in
+ * with. The account service is a route of this context: nothing reaches Google, GitHub or account.ovis.sh.
+ */
+async function accountGoogle(browser: import("playwright-core").Browser, url: string): Promise<void> {
+  const service = "https://account.ovis.sh";
+  for (const width of [390, 1280] as const) {
+    for (const offered of [["github", "google"], ["github"]] as const) {
+      for (const signedIn of [false, true]) {
+        if (signedIn && offered.length === 1) continue;
+        const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 800 }, isMobile: width === 390, hasTouch: width === 390, locale: "en" });
+        try {
+          await context.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), JSON.stringify({ ...SETTINGS, theme: "light" }));
+          await context.route((address) => address.href.startsWith(url) && (address.pathname.endsWith("/") || address.pathname.endsWith("/index.html")), async (route) => {
+            const response = await route.fetch();
+            await route.fulfill({ response, body: (await response.text()).replace("</head>", `<meta name="ovis-pc-account-service" content="${service}" />\n</head>`) });
+          });
+          await context.route(`${service}/**`, (route) => {
+            const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, content-type", "access-control-allow-methods": "GET, POST, PUT, DELETE" };
+            if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
+            switch (new URL(route.request().url()).pathname) {
+              case "/v1/providers": return route.fulfill({ headers: cors, json: { providers: offered, device: offered } });
+              case "/v1/pcs": return route.fulfill({ headers: cors, json: { pcs: [] } });
+              case "/v1/identities": return route.fulfill({ headers: cors, json: { identities: [
+                { provider: "github", added_at: "2026-11-01T00:00:00Z" },
+                { provider: "google", added_at: "2026-11-06T00:00:00Z" },
+              ] } });
+              default: return route.fulfill({ status: 404, headers: cors, json: { error: { code: "not_found" } } });
+            }
+          });
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(url);
+          await page.locator(".conn-live").waitFor({ state: "attached" });
+          if (signedIn) {
+            await page.evaluate((service) => new Promise<void>((resolve, reject) => {
+              const request = indexedDB.open("ovis-account", 1);
+              request.onupgradeneeded = () => { request.result.createObjectStore("account"); };
+              request.onerror = () => reject(request.error);
+              request.onsuccess = () => {
+                const tx = request.result.transaction("account", "readwrite");
+                tx.objectStore("account").put({ service, account: "fixture", provider: "google", access_token: "fixture-access", refresh_token: "fixture-refresh", expires_at: Date.now() + 3_600_000 }, "session");
+                tx.oncomplete = () => { request.result.close(); resolve(); };
+                tx.onabort = () => reject(tx.error);
+              };
+            }), service);
+          }
+          await openSettings(page);
+          await openSettingsPage(page, "Devices and PCs");
+          const account = page.locator("[data-section='account']");
+          const shot = async (name: string) => {
+            if (!process.env.UI_EVIDENCE_DIR) return;
+            await account.scrollIntoViewIfNeeded();
+            await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `${name}-${width}.png`), animations: "disabled" });
+          };
+          if (!signedIn) {
+            const buttons = account.locator(".account-provider");
+            if (offered.length === 2) {
+              await buttons.nth(1).waitFor();
+              assert.deepEqual(await buttons.allTextContents(), ["Continue with GitHub", "Continue with Google"], `Google sits under GitHub (${width}px)`);
+              assert.equal(await account.locator("[data-provider='google'] svg path").count(), 4, "Google's G keeps its four colours");
+              await shot("account-google-signin");
+            } else {
+              // once the service's answer is on screen, GitHub stays alone
+              await account.locator("[data-offer='service'] .account-provider").first().waitFor();
+              assert.deepEqual(await buttons.allTextContents(), ["Continue with GitHub"], `no Google button while the service offers none (${width}px)`);
+            }
+          } else {
+            const methods = account.locator(".account-method");
+            await methods.nth(1).waitFor();
+            assert.equal(await account.getByText("Signed in with Google").count(), 1, "the account row names Google");
+            assert.deepEqual(await methods.evaluateAll((rows) => rows.map((row) => [row.getAttribute("data-provider"), row.querySelector("button") !== null])), [["github", true], ["google", false]],
+              "every way to sign in can be removed but the one this page signed in with");
+            await shot("account-google-methods");
+          }
+          assert.deepEqual(errors, []);
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  }
+  console.log("PASS Continue with Google shows under GitHub only while the service offers it, and the account lists its ways to sign in, at 390 and 1280px");
+}
+
+/**
+ * Appearance's ↺ beside a changed row, and its theme cards by keyboard: ↺ shows only off the default,
+ * puts back every key of its row (a font and its size; a theme and the palette it draws) and goes; the
+ * arrows pick along the row as a radio group's do; the cards follow the Theme mode until a side is chosen.
+ */
+async function rowResets(browser: import("playwright-core").Browser, url: string): Promise<void> {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en" });
+  try {
+    await context.addInitScript((settings) => { if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", settings); }, JSON.stringify(SETTINGS));
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    const saved = () => page.evaluate(() => JSON.parse(localStorage.getItem("ovis:settings")!) as Record<string, unknown>);
+    const reset = (row: string) => page.getByRole("button", { name: `Restore defaults: ${row}`, exact: true });
+    await page.goto(`${url}?settings=appearance`);
+    await page.locator(".conn-live").waitFor({ state: "attached" });
+    await page.locator(".theme-cards").waitFor();
+    // the cards follow the Theme mode while no side is chosen here
+    const mode = page.getByRole("group", { name: "Theme", exact: true });
+    await mode.getByRole("button", { name: "Light", exact: true }).click();
+    await page.getByRole("radiogroup", { name: "Light theme", exact: true }).waitFor();
+    await mode.getByRole("button", { name: "Dark", exact: true }).click();
+    await page.getByRole("radiogroup", { name: "Dark theme", exact: true }).waitFor();
+
+    assert.equal(await reset("Terminal font").count(), 0, "no ↺ while the terminal font and size are the defaults");
+    await page.getByRole("button", { name: "Increase terminal font size", exact: true }).click();
+    await reset("Terminal font").waitFor();
+    assert.equal((await saved())["terminalFontSize"], DEFAULT_SETTINGS.terminalFontSize + 1);
+    await reset("Terminal font").focus();
+    await page.keyboard.press("Enter");
+    await reset("Terminal font").waitFor({ state: "detached" });
+    assert.equal(await page.evaluate(() => document.activeElement?.closest(".settings-row")?.querySelector(".settings-label")?.textContent), "Terminal font", "the row keeps the focus once its ↺ goes");
+    const fonts = await saved();
+    assert.deepEqual([fonts["terminalFontSize"], fonts["terminalFontFamily"] ?? DEFAULT_SETTINGS.terminalFontFamily], [DEFAULT_SETTINGS.terminalFontSize, DEFAULT_SETTINGS.terminalFontFamily], "↺ puts back the size and the font of its row");
+
+    // a custom interface font put back: the field closes and the typed list is not saved again as it goes
+    const uiFont = page.getByLabel("Interface font", { exact: true });
+    await uiFont.selectOption("custom");
+    const custom = page.getByRole("textbox", { name: "Custom interface font", exact: true });
+    await custom.fill('"Noto Sans JP"');
+    await custom.press("Enter");
+    await reset("Interface font").click();
+    await custom.waitFor({ state: "detached" });
+    assert.equal(await uiFont.inputValue(), "default", "the select shows Default once the font is put back");
+    // a reload closes Settings: open the page again from its address
+    await page.goto(`${url}?settings=appearance`);
+    await page.locator(".theme-cards").waitFor();
+    assert.equal(await page.getByLabel("Interface font", { exact: true }).inputValue(), "default", "the font put back stays put back after a reload");
+
+    const dark = themeSide(page, "dark");
+    await dark.selectOption("dracula");
+    await page.waitForFunction(() => document.documentElement.dataset.palette === "dracula");
+    await reset("Dark theme").click();
+    await page.waitForFunction((id) => document.documentElement.dataset.palette === id, DEFAULT_SETTINGS.darkTheme);
+    assert.deepEqual([(await saved())["darkTheme"], (await saved())["palette"]], [DEFAULT_SETTINGS.darkTheme, DEFAULT_SETTINGS.darkTheme], "↺ puts back the dark theme and the palette it draws");
+    assert.equal(await reset("Dark theme").count(), 0, "↺ goes once the theme is back");
+
+    // the arrows pick along the row, Home goes to its first card
+    const cards = page.getByRole("radiogroup", { name: "Dark theme", exact: true });
+    const listed = await dark.listed();
+    await cards.locator('[role="radio"][aria-checked="true"]').focus();
+    await page.keyboard.press("ArrowRight");
+    const next = listed[listed.indexOf(DEFAULT_SETTINGS.darkTheme) + 1]!;
+    await page.waitForFunction((id) => document.documentElement.dataset.palette === id, next);
+    assert.equal(await cards.locator('[role="radio"][aria-checked="true"]').getAttribute("data-theme-card"), next, "ArrowRight picks the next card");
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset["themeCard"]), next, "the picked card takes the focus");
+    await page.keyboard.press("Home");
+    await page.waitForFunction((id) => document.documentElement.dataset.palette === id, listed[0]!);
+
+    assert.deepEqual(errors, []);
+  } finally {
+    await context.close();
+  }
+  console.log("PASS Appearance: ↺ shows only off the default and puts back its row's keys; theme cards pick by arrow and follow the Theme mode");
+}
+
+async function mergedRows(browser: import("playwright-core").Browser, url: string): Promise<void> {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en" });
+  try {
+    await context.addInitScript((settings) => { if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", settings); }, JSON.stringify({ ...SETTINGS, voiceInput: "on", voiceEngine: "auto" }));
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    const pick = async (pageName: string, group: string, option: string) => {
+      await page.goto(`${url}?settings=${pageName}`);
+      await page.locator(".conn-live").waitFor({ state: "attached" });
+      await openSettingsFolds(page);
+      await page.getByRole("group", { name: group, exact: true }).getByRole("button", { name: option, exact: true }).click();
+    };
+    const pressed = async (pageName: string, group: string) => {
+      await page.goto(`${url}?settings=${pageName}`);
+      await page.locator(".conn-live").waitFor({ state: "attached" });
+      await openSettingsFolds(page);
+      return page.getByRole("group", { name: group, exact: true }).locator("button[aria-pressed='true']").textContent();
+    };
+    await pick("appearance", "Agents order", "By state");
+    await page.getByRole("group", { name: "Within a state", exact: true }).waitFor();
+    assert.equal(await pressed("appearance", "Agents order"), "By state");
+    await pick("appearance", "Agents order", "Activity");
+    assert.equal(await page.getByRole("group", { name: "Within a state", exact: true }).count(), 0, "Within a state goes with By state");
+    assert.equal(await pressed("appearance", "Agents order"), "Activity");
+    await pick("chat", "Show thinking", "Expanded");
+    assert.equal(await pressed("chat", "Show thinking"), "Expanded");
+    await pick("chat", "Show thinking", "Hidden");
+    assert.equal(await pressed("chat", "Show thinking"), "Hidden");
+    await pick("chat", "Tidy dictated text", "Terminal");
+    assert.equal(await pressed("chat", "Tidy dictated text"), "Terminal");
+    assert.deepEqual(await page.evaluate(() => { const saved = JSON.parse(localStorage.getItem("ovis:settings")!); return [saved.voicePolishChat, saved.voicePolishTerminal]; }), [false, true]);
+    assert.deepEqual(errors, []);
+  } finally {
+    await context.close();
+  }
+  console.log("PASS the merged rows (Agents order, Show thinking, Tidy dictated text) keep both settings each stands for, through a reload");
+}
+
 try {
   await buildDemoApp(app);
   await buildDevelopmentDemoApp(devApp);
@@ -515,7 +1058,9 @@ try {
             if (name === "Appearance" && process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `select-arrows-${width}-${language}.png`), animations: "disabled" });
             await checkSelectArrows(page);
             if (name === "Agents") await page.locator(".usage-accounts-row").first().waitFor();
-            if (name === "Voice input") {
+            if (name === "Chat") {
+              // Voice input is Chat's group; its OpenAI key is in Chat's More settings
+              await openSettingsFolds(page);
               await page.locator(".voice-key").waitFor();
               const dictation = page.getByLabel(label("Dictation language"), { exact: true });
               await dictation.selectOption("hu-HU");
@@ -533,19 +1078,36 @@ try {
               assert.equal(await body.locator("[role='alert']").count(), 0, "the Agents page shows no error");
               assert.deepEqual(await body.locator(".agents-item").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-agent"))), ["claude", "codex", "omp", "pi", "hermes"]);
               assert.deepEqual(await body.locator("[data-section='other-accounts'] .usage-provider-heading > span:not(.usage-account-count):not(.agent-mark)").allTextContents(), ["Cursor", "OpenCode"]);
-              assert.deepEqual(await body.locator("h3").allTextContents(), [label("On this PC"), label("Other agents herdr found"), label("Other accounts"), label("New agents"), label("Plan limits")]);
+              // herdr-app's rows: no group captions on this page
+              assert.deepEqual(await body.locator("h3").allTextContents(), []);
+              // an agent's own settings are in its row: Claude Code's permission mode for New tab
+              await body.locator(".agents-item[data-agent='claude'] .agents-toggle").click();
+              await body.locator(".agents-item[data-agent='claude']").getByLabel(label("Permission mode"), { exact: true }).waitFor();
+              // and the model and effort New tab fills in for it: a name its --model takes is kept, any other is said why
+              const claudeRow = body.locator(".agents-item[data-agent='claude']");
+              const launchDefaults = () => page.evaluate(() => { const stored = JSON.parse(localStorage.getItem("ovis:settings") ?? "{}"); return [stored.claudeLaunchModel ?? "", stored.claudeLaunchEffort ?? ""]; });
+              await claudeRow.getByLabel(label("Model"), { exact: true }).fill("opus");
+              await claudeRow.getByLabel(label("Effort"), { exact: true }).selectOption("high");
+              await page.waitForFunction(() => { const stored = JSON.parse(localStorage.getItem("ovis:settings")!); return stored.claudeLaunchModel === "opus" && stored.claudeLaunchEffort === "high"; });
+              await claudeRow.getByLabel(label("Model"), { exact: true }).fill("opus --verbose");
+              await claudeRow.locator("[role='alert']").filter({ hasText: label("One model name, without spaces.") }).waitFor();
+              assert.deepEqual(await launchDefaults(), ["opus", "high"], "a name --model would refuse is not kept");
+              await claudeRow.getByLabel(label("Model"), { exact: true }).fill("");
+              await claudeRow.getByLabel(label("Effort"), { exact: true }).selectOption("");
+              await page.waitForFunction(() => { const stored = JSON.parse(localStorage.getItem("ovis:settings")!); return stored.claudeLaunchModel === "" && stored.claudeLaunchEffort === ""; });
+              await body.locator(".agents-item[data-agent='claude'] .agents-toggle").click();
               // herdr's integrations no row shows, each with its command; one with neither its agent nor its
               // hook on the PC (copilot, cursor, antigravity-cli) is not listed at all (#2738)
               assert.deepEqual(await body.locator("[data-section='integrations'] .settings-label").allTextContents(), ["opencode"]);
               assert.equal(await body.locator("[data-section='integrations-missing']").count(), 0);
-              // the launch modes are always there, whatever the PC has
-              assert.equal(await body.locator("[data-section='launch-modes'] select").count(), 2);
               const install = (target: string): string => `herdr integration install ${target}`;
               const copyLabel = (target: string): string => label("Copy the command for {name}").replace("{name}", target);
               // a row opens on its accounts and herdr's session resume
               const codex = body.locator(".agents-item[data-agent='codex']");
               await codex.locator(".agents-toggle").tap();
               assert.equal(await codex.locator(".agents-toggle").getAttribute("aria-expanded"), "true");
+              assert.equal(await codex.getByLabel(label("Sandbox and approvals"), { exact: true }).count(), 1, "Codex's row holds the mode New tab starts it in");
+              assert.equal(await codex.getByLabel(label("Effort"), { exact: true }).count(), 1, "and the effort New tab fills in for it");
               assert.equal(await codex.locator(".usage-accounts-row").count(), 2, "Codex's two accounts are in its row");
               assert.equal(await codex.locator("code").textContent(), install("codex"));
               const copy = codex.getByRole("button", { name: copyLabel("codex"), exact: true });
@@ -584,13 +1146,14 @@ try {
               // The build minifies colors (rgba() to #rrggbbaa), so both sides are compared as the browser
               // computes them on a probe: a color, a box-shadow, or a border for `2px solid <color>`
               const themes = page.getByRole("group", { name: "Theme", exact: true });
-              const pickers = { dark: page.locator("#settings-theme-dark"), light: page.locator("#settings-theme-light") };
-              // both pickers offer every theme, grouped by kind with the side's own kind first (Q1: any theme on either side)
+              const pickers = { dark: themeSide(page, "dark"), light: themeSide(page, "light") };
+              // both sides' cards offer every theme, the side's own kind first (Q1: any theme on either side)
               for (const side of ["dark", "light"] as const) {
-                const listed = await pickers[side].locator("option").evaluateAll((nodes) => nodes.map((node) => (node as HTMLOptionElement).value));
-                assert.deepEqual([...listed].sort(), [...THEME_IDS].sort(), `the ${side} picker lists every theme once`);
-                assert.ok(listed.includes("dracula"), `the ${side} picker offers Dracula`);
-                assert.deepEqual(await pickers[side].locator("optgroup").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("label"))), side === "dark" ? ["Dark", "Light"] : ["Light", "Dark"]);
+                const listed = await pickers[side].listed();
+                assert.deepEqual([...listed].sort(), [...THEME_IDS].sort(), `the ${side} cards list every theme once`);
+                assert.ok(listed.includes("dracula"), `the ${side} cards offer Dracula`);
+                const kinds = listed.map((id) => rowFor(id, side).mode === side);
+                assert.deepEqual(kinds, [...kinds].sort((a, b) => Number(b) - Number(a)), `the ${side} cards list the side's own kind first`);
               }
               const drawn = (mode: string, id: string): Promise<unknown> => page.waitForFunction(([mode, id]) => document.documentElement.dataset.theme === mode && document.documentElement.dataset.palette === id && getComputedStyle(document.documentElement).colorScheme === mode, [mode, id]);
               /** The theme keys of the saved record and of the second key old code never touches. */
@@ -673,6 +1236,12 @@ try {
             await openSettingsPage(page, "Chat");
             const replies = page.locator(".quick-replies-list li");
             assert.ok(await replies.count() > 0);
+            // the list is edited only while the replies show; off, the row stands alone
+            const showReplies = page.getByRole("switch", { name: "Show above the message box", exact: true });
+            await showReplies.tap();
+            await page.locator(".quick-replies-list").waitFor({ state: "detached" });
+            await showReplies.tap();
+            await replies.first().waitFor();
             await page.getByRole("button", { name: "Remove quick reply 1", exact: true }).tap();
             assert.equal(await replies.count(), (JSON.parse(await page.evaluate(() => localStorage.getItem("ovis:settings")!)) as { quickReplies: string[] }).quickReplies.length);
             await page.getByRole("button", { name: "Restore defaults", exact: true }).tap();
@@ -913,11 +1482,12 @@ try {
         await openSettingsPage(page, "Appearance");
         await checkSelectArrows(page);
         if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "select-arrows-desktop.png"), animations: "disabled" });
-        const themePicker = page.getByLabel("Dark theme", { exact: true });
+        // a select on Appearance (the theme pickers are cards now): Interface font
+        const themePicker = page.getByLabel("Interface font", { exact: true });
         await themePicker.focus();
         await page.keyboard.press("ArrowDown");
-        assert.notEqual(await themePicker.inputValue(), "amber", "the native select keeps keyboard selection");
-        await themePicker.selectOption("amber");
+        assert.notEqual(await themePicker.inputValue(), "default", "the native select keeps keyboard selection");
+        await themePicker.selectOption("default");
         await page.emulateMedia({ forcedColors: "active" });
         assert.equal(await themePicker.evaluate((select) => getComputedStyle(select).appearance), "auto", "forced colors restores the native indicator");
         assert.equal(await themePicker.locator("..").locator("svg").evaluate((arrow) => getComputedStyle(arrow).display), "none");
@@ -932,9 +1502,9 @@ try {
           await openSettings(page);
           await openSettingsPage(page, "Appearance");
           await page.getByRole("group", { name: "Theme", exact: true }).getByRole("button", { name: "Dark", exact: true }).click();
-          await page.locator("#settings-theme-dark").selectOption(id);
+          await themeSide(page, "dark").selectOption(id);
           await page.waitForFunction((id) => document.documentElement.dataset.palette === id && document.documentElement.dataset.theme === "dark", id);
-          assert.equal(await page.locator("#settings-theme-light").inputValue(), "amber", `${id} has no sibling pre-fill`);
+          assert.equal(await themeSide(page, "light").inputValue(), "amber", `${id} has no sibling pre-fill`);
           const surfaces = await page.evaluate(() => {
             const style = getComputedStyle(document.documentElement);
             return ["--border", "--bg-elevated", "--bg-input"].map((role) => style.getPropertyValue(role).trim());
@@ -951,7 +1521,7 @@ try {
         }
         await openSettings(page);
         await openSettingsPage(page, "Appearance");
-        await page.locator("#settings-theme-light").selectOption("dracula");
+        await themeSide(page, "light").selectOption("dracula");
         await page.getByRole("group", { name: "Theme", exact: true }).getByRole("button", { name: "Light", exact: true }).click();
         await page.waitForFunction(() => document.documentElement.dataset.palette === "dracula" && document.documentElement.dataset.theme === "dark" && getComputedStyle(document.documentElement).colorScheme === "dark");
         assert.equal(await page.getByRole("group", { name: "Theme", exact: true }).getByRole("button", { name: "Light", exact: true }).getAttribute("aria-pressed"), "true");
@@ -1039,6 +1609,15 @@ try {
 
       await lateCloseStep(browser, url);
       await settingsSearch(browser, url);
+      await dialogSearch(browser, url);
+      await foldedGroups(browser, url);
+      await mergedRows(browser, url);
+      await rowResets(browser, url);
+      await accountPcList(browser, url);
+      await accountGoogle(browser, url);
+      await runtimeInUse(browser, url);
+      await alertChipsReset(browser, url);
+      await installedNotes(browser, url);
       await heldGroupLanding(browser, devUrl);
     } finally {
       await browser.close();

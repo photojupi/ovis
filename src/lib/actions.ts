@@ -21,6 +21,8 @@ export interface AppActions {
   selectAdjacentPane: (direction: -1 | 1) => void;
   /** the previous/next tab of the selected pane's workspace in tab strip order; wraps around */
   selectAdjacentTab: (direction: -1 | 1) => void;
+  /** the selected pane's workspace's tab at `number` (1-based) in tab strip order, as herdr's prefix+1..9; nothing past the last */
+  selectTabNumber: (number: number) => void;
   /** the previous/next workspace of the selected PC in sidebar order (pins, worktree groups); wraps around */
   selectAdjacentWorkspace: (direction: -1 | 1) => void;
   setView: (view: PaneView) => void;
@@ -62,7 +64,7 @@ export interface AppActions {
   agentStarted: (machineId: string, paneId: string) => void;
   openFind: () => void;
   openSettings: () => void;
-  /** the Add PC dialog, from Settings → Remote PCs and the palette; Settings closes first */
+  /** the Add PC dialog, from Settings → Devices and PCs and the palette; Settings closes first */
   openAddPc: () => void;
   toggleSidebar: () => void;
   /** the sidebar's Filter field, focused, with the drawer or the sidebar opened first: drawn even where Settings → Appearance leaves it out */
