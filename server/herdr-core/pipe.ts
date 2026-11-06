@@ -2,9 +2,8 @@
  * Where herdr-core's adapter (adapter.ts) listens for the server's herdr client. On Linux and macOS
  * it is `herdr-core.sock` in the state folder. Windows has no unix socket file to hand the client, so
  * there it is a named pipe, as herdr's own server and hc's core listen on (live-verified in the
- * Windows VM: Bun.listen and Bun.connect take `\\.\pipe\…`, a second listener on the same name is
- * refused with EADDRINUSE, and a pipe whose server ended answers ENOENT, so the adapter's "another
- * Ovis still listens" check holds as it is).
+ * Windows VM: Bun.listen and Bun.connect take `\\.\pipe\…`, and a second listener on the same name
+ * is refused with EADDRINUSE, which is how the adapter's start learns another Ovis still listens).
  *
  * The name comes from the state folder, so two servers on one state folder still meet on one pipe
  * and the second is refused, as two on one socket file are. Windows paths ignore case: the folder

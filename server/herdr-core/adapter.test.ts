@@ -282,6 +282,74 @@ describe("herdr-core adapter", () => {
     expect((await sessionSnapshot(dead)).panes.map((pane) => pane.pane_id)).toEqual(["t1"]);
   });
 
+  /** The pipe a Windows server listens on for a state folder of its own (pipe.ts), and a core a request would find. */
+  const onPipe = () => {
+    const dir = mkdtempSync(join(tmpdir(), "ovis-hc-pipe-"));
+    const hc = new HcConnection(() => new FakeCore({ "terminal.list": () => ({ terminals: [terminal("t1")], hidden_finished: 0 }), "doc.get": () => ({ value: LAYOUT, version: 1 }) }));
+    cleanups.push(() => { hc.close(); rmSync(dir, { recursive: true, force: true }); });
+    return { dir, pipe: adapterAddress(dir), hc };
+  };
+
+  it.skipIf(process.platform !== "win32")("opens nothing on a pipe's name that is held: the listen alone refuses the start", async () => {
+    const { pipe, hc } = onPipe();
+    let opened = 0;
+    const openedByStart = Promise.withResolvers<number>();
+    const holder = Bun.listen({
+      unix: pipe,
+      socket: {
+        open() { opened++; },
+        // only the test's own connection below writes, and what the start opened reached the holder before it
+        data() { openedByStart.resolve(opened - 1); },
+      },
+    });
+    cleanups.push(() => holder.stop(true));
+    await expect(startHerdrCoreAdapter(hc, pipe)).rejects.toThrow("Another Ovis owns this state directory");
+    const own = await Bun.connect({ unix: pipe, socket: { data() {} } });
+    own.write("x");
+    expect(await openedByStart.promise).toBe(0);
+    own.end();
+  });
+
+  it.skipIf(process.platform !== "win32")("is refused while another process holds the pipe's name, and takes the name once that process is killed", async () => {
+    const { pipe, hc } = onPipe();
+    const holder = Bun.spawn([process.execPath, "-e", `Bun.listen({ unix: ${JSON.stringify(pipe)}, socket: { data() {} } }); console.log("up")`], { stdout: "pipe" });
+    cleanups.push(() => holder.kill());
+    await holder.stdout.getReader().read();
+    await expect(startHerdrCoreAdapter(hc, pipe)).rejects.toThrow("Another Ovis owns this state directory");
+    holder.kill();
+    await holder.exited;
+    const adapter = await startHerdrCoreAdapter(hc, pipe);
+    cleanups.push(() => adapter.stop());
+    expect((await sessionSnapshot(pipe)).panes.map((pane) => pane.pane_id)).toEqual(["t1"]);
+  });
+
+  it.skipIf(process.platform !== "win32")("refuses a second start on a state folder's pipe and leaves the first serving", async () => {
+    const { dir, pipe, hc } = onPipe();
+    const first = await startHerdrCoreAdapter(hc, pipe);
+    cleanups.push(() => first.stop());
+    await expect(startHerdrCoreAdapter(hc, adapterAddress(dir))).rejects.toThrow("Another Ovis owns this state directory");
+    expect((await sessionSnapshot(pipe)).panes.map((pane) => pane.pane_id)).toEqual(["t1"]);
+  });
+
+  it.skipIf(process.platform !== "win32")("starts again on a pipe's name after a stop", async () => {
+    const { pipe, hc } = onPipe();
+    (await startHerdrCoreAdapter(hc, pipe)).stop();
+    const again = await startHerdrCoreAdapter(hc, pipe);
+    cleanups.push(() => again.stop());
+    expect((await sessionSnapshot(pipe)).panes.map((pane) => pane.pane_id)).toEqual(["t1"]);
+  });
+
+  it.skipIf(process.platform !== "win32")("stops without throwing while a client is still connected to its pipe", async () => {
+    const { pipe, hc } = onPipe();
+    const adapter = await startHerdrCoreAdapter(hc, pipe);
+    // a focus subscription stays open and needs no core: once it started, the adapter has this client
+    const started = Promise.withResolvers<void>();
+    const client = subscribeEvents([{ type: "pane.focused" }], { onStarted: () => started.resolve(), onEvent() {} }, pipe);
+    cleanups.push(() => client.close());
+    await started.promise;
+    expect(() => adapter.stop()).not.toThrow();
+  });
+
   it("refuses what only the Herdr app does, and a pane hc does not have, in herdr's codes", async () => {
     const { socket } = await setup([terminal("t1")]);
     const failure = (promise: Promise<unknown>) => promise.then(() => null, (error: unknown) => (error instanceof HerdrError ? error.code : String(error)));

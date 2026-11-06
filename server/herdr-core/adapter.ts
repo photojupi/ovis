@@ -8,6 +8,7 @@ import { cmdQuote, powershellNativeArgs, SHELL_AGENTS, shellCommandLine } from "
 import { descendantProcesses, type ProcessRow, windowsProcessTable } from "../windows-processes.ts";
 import { type HcConnection, HcError } from "./connection.ts";
 import { foreignLayout, leaves, neighbour, OVIS_LAYOUT_DOC, type OvisLayout, type PaneDirection, resizeLeaf, setRatio, splitLeaf, swapLeaves, type TabLayout } from "./layout-doc.ts";
+import { isNamedPipe } from "./pipe.ts";
 import { agentInfoOf, agentOfStatus, agentStatusOf, buildSnapshot, type FirstTurn, keptLayout, opencodeRecords, type SessionOf, reportedFacts, type HcStatus, type HcTerminal, hcKeyName, HERDR_PROTOCOL, isRecord, keyBytes, LAYOUT_DOC, onOtherMachine, OTHER_WORKSPACE_ID, PANE_NAME_LABEL, processInfoOf, SEEN_LABEL, shownStatusOf, SPACE_LABEL, TAB_LABEL, TAB_NAME_LABEL, WORKSPACE_NAME_LABEL } from "./snapshot.ts";
 import { checkoutHolding, defaultCheckoutPath, factsOf, git, gitDirIdentity, labeledWorktree, realPath, type Checkout, type Repository, repositoryOf, WORKTREE_LABEL, WorktreeError, worktreeFolder, worktreeLabel } from "./worktrees.ts";
 import type { AgentStatus, SessionSnapshot } from "../../shared/herdr-api.generated.ts";
@@ -116,8 +117,14 @@ export interface AdapterOptions {
 /** The sessions a terminal named that it keeps as candidates, the newest last. */
 const NAMED_SESSIONS = 32;
 
+const OWNED = "Another Ovis owns this state directory: the herdr-core socket is still listening";
+
 export async function startHerdrCoreAdapter(hc: HcConnection, socketPath: string, observeSeen?: SeenObserver, options: AdapterOptions = {}): Promise<HerdrCoreAdapter> {
-  if (existsSync(socketPath)) {
+  // A Windows pipe has no file to leave behind: its name ends with the process that listened on it,
+  // and Bun makes the first instance exclusively, so the listen itself says whether the name is free
+  // (EADDRINUSE when it is not). Nothing else opens the name, at the start or at the stop.
+  const pipe = isNamedPipe(socketPath);
+  if (!pipe && existsSync(socketPath)) {
     const live = await new Promise<boolean>((resolve, reject) => {
       const probe = createConnection(socketPath);
       probe.once("connect", () => { probe.destroy(); resolve(true); });
@@ -126,7 +133,7 @@ export async function startHerdrCoreAdapter(hc: HcConnection, socketPath: string
         else reject(error);
       });
     });
-    if (live) throw new Error("Another Ovis owns this state directory: the herdr-core socket is still listening");
+    if (live) throw new Error(OWNED);
     rmSync(socketPath, { force: true });
   }
   // the turn each terminal had when this server first saw it: without `herdr.seen`, a turn that
@@ -159,7 +166,7 @@ export async function startHerdrCoreAdapter(hc: HcConnection, socketPath: string
     for (const address of sessions.keys()) if (!live.has(address)) sessions.delete(address);
   };
   const answers = createAnswers(hc, firstTurn, forgetTurns, options, sessionOf);
-  const listener = Bun.listen<ConnectionState>({
+  const listen = () => Bun.listen<ConnectionState>({
     unix: socketPath,
     socket: {
       open(socket) {
@@ -196,11 +203,19 @@ export async function startHerdrCoreAdapter(hc: HcConnection, socketPath: string
       },
     },
   });
+  let listener: ReturnType<typeof listen>;
+  try {
+    listener = listen();
+  } catch (error) {
+    if (pipe && (error as NodeJS.ErrnoException).code === "EADDRINUSE") throw new Error(OWNED);
+    throw error;
+  }
   return {
     socketPath,
     stop: () => {
       listener.stop(true);
-      rmSync(socketPath, { force: true });
+      // a pipe leaves no file, and removing its name throws EBUSY while a client is still connected
+      if (!pipe) rmSync(socketPath, { force: true });
     },
   };
 }
