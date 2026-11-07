@@ -17,6 +17,7 @@ import { GUIDE_KO } from "./i18n/guide.ko.ts";
 import { UPDATES_KO } from "./i18n/updates.ko.ts";
 import { PALETTE_KO } from "./i18n/palette.ko.ts";
 import { RELAY_KO } from "./i18n/relay.ko.ts";
+import { RUNTIME_MOVE_KO } from "./i18n/runtime-move.ko.ts";
 
 /**
  * Korean for every `t("…")` in src/ that no part in lib/i18n/ holds: keys more than one feature
@@ -41,6 +42,10 @@ const BASE: Record<string, string> = {
   "Signing in…": "로그인하는 중…",
   "The sign-in did not finish. Try again.": "로그인을 끝내지 못했습니다. 다시 시도하세요.",
   "Open {provider} and enter this code. Enter it only if you started this sign-in on this page.": "{provider}을(를) 열고 이 코드를 입력하세요. 이 페이지에서 직접 시작한 로그인일 때만 입력하세요.",
+  "On any device, open {address} and enter this code, then continue with GitHub or Google. Enter it only if you started this sign-in on this page.": "아무 기기에서 {address}를 열고 이 코드를 입력한 뒤 GitHub나 Google로 계속하세요. 이 페이지에서 직접 시작한 로그인일 때만 입력하세요.",
+  "QR code of the sign-in page with this code filled in": "이 코드가 채워진 로그인 페이지 QR 코드",
+  "Waiting for the sign-in…": "로그인을 기다리는 중…",
+  "Open the sign-in page": "로그인 페이지 열기",
   "Waiting for {provider}…": "{provider} 승인을 기다리는 중…",
   "Open {provider}": "{provider} 열기",
   "{provider} refused the sign-in.": "{provider}에서 로그인을 거절했습니다.",
@@ -52,6 +57,7 @@ const BASE: Record<string, string> = {
   "Sign in again": "다시 로그인",
   "Added {date}": "{date}에 추가됨",
   "To change how you sign in, sign in again with {provider} first.": "로그인 방법을 바꾸려면 먼저 {provider}(으)로 다시 로그인하세요.",
+  "To change how you sign in, sign in again with {provider} on its own sign-in page first.": "로그인 방법을 바꾸려면 먼저 {provider} 자체 로그인 페이지에서 다시 로그인하세요.",
   "Add another way to sign in from the Ovis desktop app.": "다른 로그인 방법은 Ovis 데스크톱 앱에서 추가하세요.",
   "Add {provider}": "{provider} 추가",
   "The code expired. Sign in again to get a new one.": "코드가 만료되었습니다. 다시 로그인해 새 코드를 받으세요.",
@@ -61,7 +67,14 @@ const BASE: Record<string, string> = {
   "Add {device}?": "{device} 추가할까요?",
   "Through {pc} · joins your {n} PCs": "{pc}에서 온 요청 · PC {n}대에 추가됩니다",
   "Pick the number on {device}": "{device} 화면의 숫자를 고르세요",
-  "Didn't ask for this? Deny it.": "요청한 적이 없다면 거절하세요.",
+  "Approve only if you started this yourself just now. Didn't ask for it? Deny it.": "방금 직접 시작한 요청일 때만 승인하세요. 요청한 적이 없다면 거절하세요.",
+  "Network location unknown": "네트워크 위치 알 수 없음",
+  "Network near {place}": "네트워크 위치: {place} 근처",
+  "The name and system are what the device says. The place is where its network connects from.": "이름과 시스템은 기기가 스스로 알린 값이고, 위치는 그 기기 네트워크가 접속한 곳이에요.",
+  "This device asked again with other details. Check them, then pick the number again.": "기기가 다른 정보로 다시 요청했어요. 바뀐 정보를 확인한 뒤 숫자를 다시 고르세요.",
+  "Device": "기기",
+  "The sign-in was refused.": "로그인이 거절됐어요.",
+  "This sign-in already belongs to another Ovis account. Nothing was changed.": "이 로그인은 이미 다른 Ovis 계정에 연결돼 있어요. 아무것도 바뀌지 않았어요.",
   "Deny": "거부",
   "never": "없음",
   "just now": "방금",
@@ -191,11 +204,21 @@ const BASE: Record<string, string> = {
   "Filter workspaces and agents": "워크스페이스와 에이전트 필터",
   "Connecting…": "연결 중…",
   "Connected": "연결됨",
+  "Add a connection": "연결 추가",
+  "Answers": "응답함",
+  "Same Wi-Fi, direct": "같은 Wi-Fi 바로",
+  "Tailscale, direct": "Tailscale 바로",
+  "Seoul relay": "서울 릴레이",
+  "Through the relay": "릴레이",
+  "{n} ms": "{n} ms",
+  "Check now": "지금 확인",
+  "Checking…": "확인 중…",
   "relay": "릴레이",
   "direct": "직접",
   "local": "로컬",
   "Via a loopback address: this PC, or a tunnel to it": "루프백 주소로 연결: 이 PC, 또는 이 PC로 오는 터널",
   "Via the Ovis relay": "Ovis 릴레이를 거쳐 연결",
+  "Directly on the same network, not through the relay": "같은 네트워크에서 릴레이 없이 바로 연결",
   "Via the Portal relay": "Portal 릴레이를 거쳐 연결",
   "Via Tailscale": "Tailscale을 거쳐 연결",
   "Via Tailscale, or Funnel from the internet": "Tailscale을 거쳐 연결, 또는 인터넷에서 Funnel로 연결",
@@ -251,7 +274,6 @@ const BASE: Record<string, string> = {
   "Submit": "제출",
   "Recommended": "추천",
   "Agents": "에이전트",
-  "Show {name}": "{name} 표시",
   "Check again": "다시 확인",
   "Setup guide": "설정 안내",
   "Could not confirm this browser is paired. Check that cookies are enabled, then try again.": "이 브라우저의 페어링을 확인할 수 없습니다. 쿠키가 허용되어 있는지 확인한 뒤 다시 시도하세요.",
@@ -447,7 +469,7 @@ const BASE: Record<string, string> = {
   "New terminal": "새 터미널",
   "New terminal failed: {reason}": "새 터미널 열기 실패: {reason}",
   "herdr prefix: press a key": "herdr 접두키: 키를 누르세요",
-  "Connect a device": "기기 연결",
+  "Shell": "셸",
   "This device": "이 기기",
   "Sign out of {provider}": "{provider} 로그아웃",
   "Ovis relay": "Ovis 릴레이",
@@ -479,6 +501,7 @@ export const KO_PARTS: Record<string, Record<string, string>> = {
   updates: UPDATES_KO,
   palette: PALETTE_KO,
   relay: RELAY_KO,
+  "runtime-move": RUNTIME_MOVE_KO,
 };
 
 export const KO: Record<string, string> = Object.assign({}, ...Object.values(KO_PARTS));

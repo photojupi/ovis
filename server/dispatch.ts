@@ -33,6 +33,9 @@ import { textEditAllowed } from "./file-edit.ts";
 import { handleFileRequest } from "./file-routes.ts";
 import { BACKGROUND_AGENT_PATH, handleBackgroundAgentRequest } from "./background-agent.ts";
 import { paneGet, ping } from "./herdr/client.ts";
+import { RUNTIME_MOVE_PATH } from "./runtime-move.ts";
+import type { StopRefusal } from "./runtime-move-service.ts";
+import type { MoveService } from "./runtime-move-service.ts";
 import { handlePushRequest } from "./push.ts";
 import { handlePromptRequest, type OpenCodePromptState } from "./prompt.ts";
 import { attachableIdentity } from "./pty/sidecar.ts";
@@ -75,6 +78,8 @@ type PortalStartup = { ok: true } | { ok: false; error: unknown };
 
 /** Per-server services shared by socket requests and other dispatch callers. */
 export interface RequestServices {
+  /** the move of herdr's session to herdr-core, where the runtime can be switched from here */
+  readonly runtimeMove: MoveService | null;
   readonly relay: RelayService;
   readonly relayReceiptIds: RelayReceiptIds;
   readonly options: NonNullable<Parameters<typeof createServer>[0]>;
@@ -306,6 +311,12 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
     setRequestRoute("open-refusal");
     return jsonResponse({ error: { code: "owner_only", message: "Pair without a code from this PC itself, or from a paired device: an open LAN window is not told when a phone waits for approval." } }, 403);
   }
+  // the owner's other PCs answer this PC's own Tailscale login (server/tailnet-pcs.ts): an open LAN window, a Portal
+  // visitor or a device on the relay must not borrow it to pair this PC with them
+  if (pathname === "/api/machines/tailnet" && access.level === "full" && (access.via === "open" || access.via === "portal" || access.via === "relay")) {
+    setRequestRoute("owner-refusal");
+    return jsonResponse({ error: { code: "owner_only", message: "Add PCs from your Tailscale on this PC itself, or from a device paired with it directly." } }, 403);
+  }
   // and what it keeps open is closed after a while, so it comes through Portal's sign-in again (portal.ts recheckMs)
   const portalRecheckMs = access.level === "full" && access.via === "portal" ? options.portal?.recheckMs : undefined;
   if (access.level === "full" && access.via === "portal" && standingAccess) {
@@ -459,7 +470,7 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
           // and every page media address its renders were given
           forgetPageMedia({ device: id });
         }
-      }, ctx.lanHttps === true);
+      }, ctx.lanHttps === true, { list: () => ctx.services.relay.connections(), check: (ms) => ctx.services.relay.checkConnections(ms) });
     } catch (error) { return errorResponse(error); }
   }
 
@@ -533,8 +544,14 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
     // this server is open to the network with no token and nothing paired, told to a client
     // that got in and to nobody else: naming it to an anonymous caller would be
     // reconnaissance, not help. Nothing here changes who is let in (server/access.ts).
-    const lan_exposure = access.level === "full" && lanExposed({ hostname, tokenConfigured: token !== "", gated: devices.gated })
-      ? { host: hostname } : undefined;
+    const directCarriers = ctx.services.relay.status().direct?.carriers ?? [];
+    const lan_exposure = access.level !== "full" ? undefined
+      : lanExposed({ hostname, tokenConfigured: token !== "", gated: devices.gated }) ? { host: hostname } : undefined;
+    // the relay's direct carrier: on the network, but for devices paired through the relay only, and said in those
+    // words. A field of its own: a 0.4.x client takes any lan_exposure for an open server.
+    const direct_exposure = access.level !== "full" || lan_exposure || directCarriers.length === 0 ? undefined
+      : { host: new URL(directCarriers[0]!.replace(/^ws:/, "http:")).hostname };
+    const exposure = { ...(lan_exposure ? { lan_exposure } : {}), ...(direct_exposure ? { direct_exposure } : {}) };
     // what protects this server, for a client that got in (a watching one too) and nobody else;
     // per request, so never stored. The ingress is this request's, proven or `unknown`.
     // Portal's proof says how the request came even when the token or a paired device signed it in.
@@ -567,10 +584,14 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
       const info = await ping();
       // a forced answer (tests) and a runtime without the PTY sidecar are told the way a Windows herdr's own would be
       const herdr = attachableIdentity(info, sidecar);
-      return jsonResponse({ ok: true, herdr, auth, ...relay, ...(lan_exposure ? { lan_exposure } : {}), ...(security ? { security } : {}), ...(herdr_core ? { herdr_core } : {}), ...(herdr_runtime ? { herdr_runtime } : {}),
+      return jsonResponse({ ok: true, herdr, auth, ...relay, ...exposure, ...(security ? { security } : {}), ...(herdr_core ? { herdr_core } : {}), ...(herdr_runtime ? { herdr_runtime } : {}),
         web_ui: { boot_id: bootId, revision: process.env["OVIS_REVISION"] ?? null, ...(serverId ? { server_id: serverId } : {}) } }, 200, securityHeaders);
     } catch (error) {
-      return errorResponse(error);
+      const failed = errorResponse(error);
+      if (!lan_exposure && !direct_exposure) return failed;
+      // herdr away says nothing of this PC's network listeners: they are told all the same
+      const body: unknown = await failed.json();
+      return jsonResponse({ ...(body !== null && typeof body === "object" ? body : {}), ...exposure }, failed.status, { "cache-control": "no-store" });
     }
   }
 
@@ -583,8 +604,103 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
     if (!options.runtimeService) return jsonResponse({ error: { code: "runtime_locked", message: "this server cannot switch its runtime" } }, 409);
     let body: unknown;
     try { body = await request.json(); } catch { return badRequest("invalid_json", "send { \"runtime\": \"herdr\" | \"herdr-core\" }"); }
+    // a move to herdr-core switches by itself once everything is built there; checked after the body's
+    // await, right before the switch, so a move that started meanwhile is seen
+    if (ctx.services.runtimeMove?.busy()) return jsonResponse({ error: { code: "runtime_switching", message: "a move to herdr-core is waiting or running" } }, 409);
     const answer = options.runtimeService.request(body !== null && typeof body === "object" ? (body as Record<string, unknown>)["runtime"] : undefined);
     return answer.ok ? jsonResponse({ accepted: true }, 202) : jsonResponse({ error: { code: answer.code, message: answer.message } }, answer.status);
+  }
+
+  if (pathname === `${RUNTIME_MOVE_PATH}/install`) {
+    setRequestRoute(pathname);
+    // downloads and runs a program on this PC: the runtime switch's own boundary, and only from this app's page
+    if (!(access.level === "full" && access.role === "drive" && access.via !== "open")) return jsonResponse({ error: { code: "forbidden", message: "only a device that drives this PC can install herdr-core" } }, 403);
+    if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
+    if (!updateRequestAllowed(request)) return jsonResponse({ error: { code: "forbidden", message: "an install must come from this app's own page" } }, 403);
+    const move = ctx.services.runtimeMove;
+    if (!move) return jsonResponse({ error: { code: "runtime_locked", message: "this server cannot switch its runtime" } }, 409);
+    try {
+      const refused = await move.install();
+      if (refused === null) return jsonResponse({ installed: true });
+      return jsonResponse({ error: { code: refused, message: refused === "installing" ? "herdr-core is already being installed" : "Ovis offers no herdr-core install here" } }, 409);
+    } catch (error) {
+      return jsonResponse({ error: { code: "install_failed", message: error instanceof Error ? error.message : String(error) } }, 502);
+    }
+  }
+
+  if (pathname === `${RUNTIME_MOVE_PATH}/stop`) {
+    setRequestRoute(pathname);
+    // ends a command in a pane of this PC: the move's own boundary, and only from this app's page
+    if (!(access.level === "full" && access.role === "drive" && access.via !== "open")) return jsonResponse({ error: { code: "forbidden", message: "only a device that drives this PC can end a pane's command" } }, 403);
+    if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
+    if (!updateRequestAllowed(request)) return jsonResponse({ error: { code: "forbidden", message: "a stop must come from this app's own page" } }, 403);
+    const move = ctx.services.runtimeMove;
+    if (!move) return jsonResponse({ error: { code: "runtime_locked", message: "this server cannot switch its runtime" } }, 409);
+    let body: unknown;
+    try { body = await request.json(); } catch { return badRequest("invalid_json", "send { \"pane_id\": \"...\", \"force\"?: true }"); }
+    const fields = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+    const paneId = fields["pane_id"];
+    if (typeof paneId !== "string" || paneId === "") return badRequest("invalid_pane", "pane_id must name a pane of the plan");
+    if (fields["force"] !== undefined && typeof fields["force"] !== "boolean") return badRequest("invalid_force", "force must be true or false");
+    const command = fields["command"];
+    if (command !== undefined && typeof command !== "string") return badRequest("invalid_command", "command must name the command shown");
+    try {
+      const refused = await move.stopPane(paneId, fields["force"] === true, command);
+      if (refused === null) return jsonResponse({ ok: true });
+      return jsonResponse({ error: { code: refused, message: stopRefusalText(refused) } }, 409);
+    } catch (error) {
+      return errorResponse(error);
+    }
+  }
+
+  if (pathname === `${RUNTIME_MOVE_PATH}/stop-all`) {
+    setRequestRoute(pathname);
+    // ends commands in panes of this PC: the move's own boundary, and only from this app's page
+    if (!(access.level === "full" && access.role === "drive" && access.via !== "open")) return jsonResponse({ error: { code: "forbidden", message: "only a device that drives this PC can end a pane's command" } }, 403);
+    if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
+    if (!updateRequestAllowed(request)) return jsonResponse({ error: { code: "forbidden", message: "a stop must come from this app's own page" } }, 403);
+    const move = ctx.services.runtimeMove;
+    if (!move) return jsonResponse({ error: { code: "runtime_locked", message: "this server cannot switch its runtime" } }, 409);
+    let body: unknown;
+    try { body = await request.json(); } catch { return badRequest("invalid_json", "send {} to ask, or { \"token\": \"...\" } to confirm"); }
+    const token = body !== null && typeof body === "object" ? (body as Record<string, unknown>)["token"] : undefined;
+    if (token !== undefined && (typeof token !== "string" || token === "")) return badRequest("invalid_token", "token must be the one the ask returned");
+    try {
+      if (token === undefined) {
+        const offer = await move.prepareStopAll();
+        return offer === "not_waiting" ? jsonResponse({ error: { code: offer, message: stopRefusalText(offer) } }, 409) : jsonResponse(offer);
+      }
+      const refused = await move.stopAll(token);
+      if (refused === null) return jsonResponse({ ok: true });
+      return jsonResponse({ error: { code: refused, message: refused === "no_offer" ? "that confirm is used or unknown: ask again" : stopRefusalText(refused) } }, 409);
+    } catch (error) {
+      return errorResponse(error);
+    }
+  }
+
+  if (pathname === RUNTIME_MOVE_PATH) {
+    setRequestRoute(pathname);
+    // folders and conversation ids of every pane, and agents ended and started: the runtime switch's own boundary
+    if (!(access.level === "full" && access.role === "drive" && access.via !== "open")) return jsonResponse({ error: { code: "forbidden", message: "only a device that drives this PC can move its runtime" } }, 403);
+    const move = ctx.services.runtimeMove;
+    if (!move) return jsonResponse({ error: { code: "runtime_locked", message: "this server cannot switch its runtime" } }, 409);
+    if (request.method === "GET") {
+      try { return jsonResponse(await move.read(), 200, { "cache-control": "no-store" }); } catch (error) { return errorResponse(error); }
+    }
+    if (request.method !== "POST" && request.method !== "DELETE") return badRequest("method_not_allowed", "use GET, POST or DELETE");
+    if (!updateRequestAllowed(request)) return jsonResponse({ error: { code: "forbidden", message: "a runtime move must come from this app's own page" } }, 403);
+    if (request.method === "DELETE") { move.cancel(); return jsonResponse({ ok: true }); }
+    let body: unknown;
+    try { body = await request.json(); } catch { return badRequest("invalid_json", "send { \"revision\": \"...\" }"); }
+    const revision = body !== null && typeof body === "object" ? (body as Record<string, unknown>)["revision"] : undefined;
+    if (typeof revision !== "string" || revision === "") return badRequest("invalid_revision", "revision must name the plan shown");
+    try {
+      const refused = await move.start(revision);
+      if (refused === null) return jsonResponse({ accepted: true }, 202);
+      return jsonResponse({ error: { code: refused, message: refused === "plan_changed" ? "the panes changed since the plan was shown: look again" : refused === "already_moving" ? "a move is already waiting or running" : refused === "runtime_switching" ? "the server is switching its runtime: try again once it is back" : "no move to herdr-core is offered here" } }, 409);
+    } catch (error) {
+      return errorResponse(error);
+    }
   }
 
   if (pathname === "/api/herdr-ui") {
@@ -690,4 +806,17 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
   return serveStatic(pathname, request.headers.get("accept-encoding"), requestOrigin(request));
   })());
   });
+}
+
+/** Why a stop of a busy pane did nothing, in the words the move's dialog shows. */
+function stopRefusalText(refused: StopRefusal): string {
+  switch (refused) {
+    case "not_waiting": return "no move is waiting";
+    case "not_running": return "that pane is not a shell running a command";
+    case "changed": return "the panes changed since you looked: look again";
+    case "own_server": return "that pane runs this Ovis server";
+    case "own_group_unknown": return "Ovis cannot tell its own process group here, so it ends nothing";
+    case "not_tried": return "send Ctrl+C first, and force only once it has had a few seconds";
+    case "not_local": return "this PC does not show that command in front of its shell, so Ovis does not signal it";
+  }
 }

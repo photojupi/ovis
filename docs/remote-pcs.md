@@ -79,11 +79,46 @@ end-to-end encryption and the same device key, kept on this server in
 `Ovis on <this PC's name>`, with the access any paired device has. The PC itself is saved in
 `<stateDir>/relay-pcs.json`, apart from `machines.json`, so going back to an older release still starts.
 
+**PCs on your Tailscale**, in the same **Connect a device** dialog, saves typing the code: it lists
+the other PCs of this PC's own Tailscale login whose Ovis already lets this PC in as you (served by
+`tailscale serve`, no token), and **Add PC** adds one through the relay in one tap. This PC reads
+`tailscale status`, asks only online, untagged peers of its own login that do not report iOS or
+Android (the first 32 of them in that list; type a code for one past that), asks the
+chosen PC for its code over Tailscale, and checks that the relay found the same PC (`server_id`)
+before it pairs; on a mismatch nothing is added. A PC whose relay is off shows **Turn the relay on
+on that PC first**. PCs of another login, tagged nodes and iOS or Android devices are never asked, and Tailscale
+alone never adds a PC to your account (`GET` and `POST /api/machines/tailnet`; the `POST` takes only
+an address the latest look found in the last 10 minutes, including a PC it left off the list because
+it was already added).
+
 Its workspaces then join the sidebar as an SSH PC's do. Nothing is installed on that PC: it runs
 its own Ovis, which updates itself, so it has no bridge controls. Its connection carries the PC's
 status, its API routes and its terminals as streams of one relay session, which holds at most 8
 WebSockets, so about 7 of its terminals can be open at once. A dropped connection comes back with
 the same backoff as an SSH PC's and signs in with the saved key; nothing typed is sent again.
+
+The connection takes the best route it can, as the phone apps do ([Direct on the same
+network](relay.md#direct-on-the-same-network)): that PC's direct carriers first (addresses on its own
+network before Tailscale ones), then the relay. The carriers come from that PC inside the encrypted
+channel on each sign-in (this server always offers `direct-tailnet`, so a Tailscale address is named
+too) and are kept with the key, so they follow it to another network. This server dials only those on
+a private network or Tailscale's, on the direct listener's port 7319: never link-local or another port,
+whatever that PC names (a PC whose listener had to take another port is reached through the relay). A sign-in
+tries them within 1.5 s, then the relay. A try through the relay that found none answering, at a sign-in or a
+check, holds the next one back for that PC across reconnects until the check is due again (5 minutes,
+longer after a carrier that answered but could not carry a session), unless this PC is on another
+network or slept meanwhile. A route that works (Tailscale, say, while the PC's own network does not
+answer from here) is always tried first. While a later route carries it, this server checks the
+earlier ones (a Noise handshake to the pinned key, no session) after each sign-in, then at most every
+5 minutes, and at once when its own addresses change or a read comes a minute or more late (it slept);
+it reads its addresses every 30 s and sends nothing for that. Once one proves to be that PC and no request or terminal input
+is under way for 3 s, it signs in there first and only then closes the old session: requests that
+start meanwhile wait for it and go on the new route, and input on an open terminal in that window
+keeps the old session for a later try. The PC stays connected (unless that PC already holds as many
+sessions of this key as it allows, when letting the new one in can end the old one first and the PC
+shows `reconnecting` for a moment), its status socket reopens on the new route, and open terminals
+reconnect as after any drop. `GET /api/machines` names the route of a connected relay PC as `route`:
+`direct` or `relay`.
 
 **Revoke** under Phone & devices on the other PC ends this PC's access: the PC turns to an error
 that says so and is not tried again. **Remove PC** here forgets the PC and its key; revoke it on

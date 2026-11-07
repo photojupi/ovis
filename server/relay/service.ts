@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
+import type { DeviceConnection } from "../../shared/access.ts";
 import { encodeOffer } from "../../shared/relay-offer.ts";
 import type { RelayOffer } from "../../shared/relay-offer.ts";
 import { GLOBAL_RELAY, REGIONAL_RELAYS } from "../../shared/relay-regions.ts";
@@ -44,7 +45,7 @@ export interface RelayServiceOptions {
    * Direct connections on this PC's networks while the relay is on (server/relay/direct.ts), unless
    * turned off: the real entrypoint passes `{}`; without it (tests) nothing listens on the network.
    */
-  readonly direct?: Pick<DirectCarrierOptions, "addresses" | "peerAllowed" | "preferredPort" | "refreshMs" | "advertise">;
+  readonly direct?: Pick<DirectCarrierOptions, "addresses" | "peerAllowed" | "preferredPort" | "refreshMs" | "advertise" | "tailnetIp" | "tailnetAddresses">;
 }
 
 /** A regional relay is advertised only when it answers in at most this share of the global one's round trip. */
@@ -162,12 +163,18 @@ export class RelayService {
     return this.saved ?? undefined;
   }
 
+  /** How each device with an encrypted session up reaches this PC, over the relays and the direct carriers alike. */
+  connections(): Map<string, DeviceConnection> { return this.signedIn.connections(); }
+
+  /** Measures every session's round trip now (GET /api/devices?check=1), waiting at most `timeoutMs`. */
+  checkConnections(timeoutMs: number): Promise<void> { return this.signedIn.check(timeoutMs); }
+
   /** Phase and error are the global link's: every phone can reach the PC there. */
   status(): RelayStatus {
     return { phase: this.phase, relay: this.advertised, app: this.app,
       sessions: (this.link?.sessions ?? 0) + (this.regionalLink?.sessions ?? 0) + (this.directCarrier?.sessions ?? 0),
       blocked: this.blocked, error: this.error,
-      ...(this.options.direct ? { direct: { on: this.directEnabled(), carriers: this.directCarrier?.advertised() ?? [] } } : {}) };
+      ...(this.options.direct ? { direct: { on: this.directEnabled(), carriers: this.directCarrier?.advertised(true) ?? [] } } : {}) };
   }
 
   private directPath(): string { return join(this.options.stateDir, "relay", "direct.json"); }
@@ -218,7 +225,7 @@ export class RelayService {
     return direct?.stop() ?? Promise.resolve();
   }
 
-  private directCarriers(): readonly string[] { return this.directCarrier?.advertised() ?? []; }
+  private directCarriers(tailnet: boolean): readonly string[] { return this.directCarrier?.advertised(tailnet) ?? []; }
 
   private regionPath(): string { return join(this.options.stateDir, "relay", "region.json"); }
 
@@ -253,7 +260,7 @@ export class RelayService {
       const regional = new RelayLink({
         relay, identity, services, port: this.port,
         connect: this.options.connect, clock: this.options.clock, random: this.options.random, serverVersion: this.options.serverVersion,
-        relayHints: () => this.relayHints(), directCarriers: () => this.directCarriers(), sessions: this.signedIn,
+        relayHints: () => this.relayHints(), directCarriers: (tailnet) => this.directCarriers(tailnet), sessions: this.signedIn,
         onState: (phase) => { if (this.regionalLink === regional) this.regionalPhase = phase; },
       });
       this.regionalLink = regional;
@@ -305,7 +312,7 @@ export class RelayService {
       const link = new RelayLink({
         relay: this.relay, identity: this.identity, services, port: this.port,
         connect: this.options.connect, clock: this.options.clock, random: this.options.random, serverVersion: this.options.serverVersion,
-        relayHints: () => this.relayHints(), directCarriers: () => this.directCarriers(), sessions: this.signedIn,
+        relayHints: () => this.relayHints(), directCarriers: (tailnet) => this.directCarriers(tailnet), sessions: this.signedIn,
         onState: (phase, error) => { if (this.link === link) { this.phase = phase; this.error = error; } },
       });
       this.link = link;

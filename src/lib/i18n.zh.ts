@@ -17,6 +17,7 @@ import { GUIDE_ZH } from "./i18n/guide.zh.ts";
 import { UPDATES_ZH } from "./i18n/updates.zh.ts";
 import { PALETTE_ZH } from "./i18n/palette.zh.ts";
 import { RELAY_ZH } from "./i18n/relay.zh.ts";
+import { RUNTIME_MOVE_ZH } from "./i18n/runtime-move.zh.ts";
 
 /**
  * Simplified Chinese for every `t("…")` in src/ that no part in lib/i18n/ holds: keys more than
@@ -45,6 +46,10 @@ const BASE: Record<string, string> = {
   "Signing in…": "正在登录…",
   "The sign-in did not finish. Try again.": "登录未完成。请重试。",
   "Open {provider} and enter this code. Enter it only if you started this sign-in on this page.": "打开 {provider} 并输入此代码。仅当这是你在此页面上自己发起的登录时才输入。",
+  "On any device, open {address} and enter this code, then continue with GitHub or Google. Enter it only if you started this sign-in on this page.": "在任意设备上打开 {address} 并输入此代码，然后选择用 GitHub 或 Google 继续。仅当这是你在此页面上自己发起的登录时才输入。",
+  "QR code of the sign-in page with this code filled in": "已填好此代码的登录页面二维码",
+  "Waiting for the sign-in…": "正在等待登录…",
+  "Open the sign-in page": "打开登录页面",
   "Waiting for {provider}…": "正在等待 {provider} 批准…",
   "Open {provider}": "打开 {provider}",
   "{provider} refused the sign-in.": "{provider} 拒绝了此次登录。",
@@ -56,6 +61,7 @@ const BASE: Record<string, string> = {
   "Sign in again": "重新登录",
   "Added {date}": "{date} 添加",
   "To change how you sign in, sign in again with {provider} first.": "要更改登录方式，请先用 {provider} 重新登录。",
+  "To change how you sign in, sign in again with {provider} on its own sign-in page first.": "要更改登录方式，请先在 {provider} 自己的登录页面上重新登录。",
   "Add another way to sign in from the Ovis desktop app.": "请在 Ovis 桌面应用中添加其他登录方式。",
   "Add {provider}": "添加 {provider}",
   "The code expired. Sign in again to get a new one.": "代码已过期。请重新登录以获取新代码。",
@@ -65,7 +71,14 @@ const BASE: Record<string, string> = {
   "Add {device}?": "添加 {device}？",
   "Through {pc} · joins your {n} PCs": "经由 {pc} · 将加入你的 {n} 台 PC",
   "Pick the number on {device}": "选择 {device} 上显示的数字",
-  "Didn't ask for this? Deny it.": "如果不是你发起的，请拒绝。",
+  "Approve only if you started this yourself just now. Didn't ask for it? Deny it.": "仅在你刚刚亲自发起时才批准。如果不是你发起的，请拒绝。",
+  "Network location unknown": "网络位置未知",
+  "Network near {place}": "网络位置：{place} 附近",
+  "The name and system are what the device says. The place is where its network connects from.": "名称和系统是设备自己报告的；位置是其网络的接入地点。",
+  "This device asked again with other details. Check them, then pick the number again.": "该设备用不同的信息再次发起请求。请先核对，再重新选择数字。",
+  "Device": "设备",
+  "The sign-in was refused.": "登录被拒绝。",
+  "This sign-in already belongs to another Ovis account. Nothing was changed.": "此登录已属于另一个 Ovis 账户，未做任何更改。",
   "Deny": "拒绝",
   "never": "从未",
   "just now": "刚刚",
@@ -195,11 +208,21 @@ const BASE: Record<string, string> = {
   "Filter workspaces and agents": "筛选工作区和代理",
   "Connecting…": "正在连接…",
   "Connected": "已连接",
+  "Add a connection": "添加连接",
+  "Answers": "有响应",
+  "Same Wi-Fi, direct": "同一 Wi-Fi 直连",
+  "Tailscale, direct": "Tailscale 直连",
+  "Seoul relay": "首尔中继",
+  "Through the relay": "经由中继",
+  "{n} ms": "{n} ms",
+  "Check now": "立即检查",
+  "Checking…": "正在检查…",
   "relay": "中继",
   "direct": "直连",
   "local": "本地",
   "Via a loopback address: this PC, or a tunnel to it": "经由回环地址：本机，或通往它的隧道",
   "Via the Ovis relay": "经由 Ovis 中继",
+  "Directly on the same network, not through the relay": "在同一网络上直接连接，不经过中继",
   "Via the Portal relay": "经由 Portal 中继",
   "Via Tailscale": "经由 Tailscale",
   "Via Tailscale, or Funnel from the internet": "经由 Tailscale，或经由 Funnel 从互联网连接",
@@ -255,7 +278,6 @@ const BASE: Record<string, string> = {
   "Submit": "提交",
   "Recommended": "推荐",
   "Agents": "代理",
-  "Show {name}": "显示 {name}",
   "Check again": "重新检查",
   "Setup guide": "设置向导",
   "Could not confirm this browser is paired. Check that cookies are enabled, then try again.": "无法确认此浏览器已配对。请检查是否允许 Cookie，然后重试。",
@@ -451,7 +473,7 @@ const BASE: Record<string, string> = {
   "New terminal": "新建终端",
   "New terminal failed: {reason}": "新建终端失败：{reason}",
   "herdr prefix: press a key": "herdr 前缀键：请按一个键",
-  "Connect a device": "连接设备",
+  "Shell": "Shell",
   "This device": "此设备",
   "Sign out of {provider}": "退出 {provider} 登录",
   "Ovis relay": "Ovis 中继",
@@ -483,6 +505,7 @@ export const ZH_PARTS: Record<string, Record<string, string>> = {
   updates: UPDATES_ZH,
   palette: PALETTE_ZH,
   relay: RELAY_ZH,
+  "runtime-move": RUNTIME_MOVE_ZH,
 };
 
 export const ZH: Record<string, string> = Object.assign({}, ...Object.values(ZH_PARTS));

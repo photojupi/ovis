@@ -1,3 +1,4 @@
+import type { TailnetPcsOptions } from "./tailnet-pcs.ts";
 import "./adopt-legacy-env.ts";
 import type { RelaySocket } from "../shared/relay-channel.ts";
 import { createCore, type SocketData } from "./core/index.ts";
@@ -25,10 +26,13 @@ import { AGENT_CATALOG, catalogPlatform } from "../shared/agent-catalog.ts";
 import { AgentInstaller } from "./agent-catalog-install.ts";
 import { type BackgroundAgentDeps } from "./background-agent.ts";
 import { herdrSocketPath, ping } from "./herdr/client.ts";
-import { coreConnection, coreSeenMarker, hcBin, hcMachine, NoHerdrCoreError, servingCore, setRuntime, startRuntime } from "./herdr-core/runtime.ts";
+import { coreConnection, coreSeenMarker, hcBin, hcMachine, NoHerdrCoreError, runtime, servingCore, setRuntime, startRuntime } from "./herdr-core/runtime.ts";
 import { chooseRuntime, runtimeService, type RuntimeChoice, type RuntimeService } from "./herdr-core/runtime-choice.ts";
+import { moveService, type HcInstaller } from "./runtime-move-service.ts";
 import { bridgePins } from "./herdr-core/pin-label.ts";
-import { herdrCoreFacts } from "./herdr-core/discovery.ts";
+import { herdrCoreFacts, rediscoverHc } from "./herdr-core/discovery.ts";
+import { HC_RELEASE, hcInstallTarget, installHc } from "./herdr-core/install.ts";
+import { userHome } from "./user-home.ts";
 import { type HerdrCoreFacts, LOCAL_MACHINE } from "../shared/machines.ts";
 import { type AlertTiming, defaultStateDir } from "./push.ts";
 import { mergeSiblingState, siblingStateDir } from "./state-merge.ts";
@@ -98,6 +102,21 @@ const DRAFT_CLEAR_POLL_MS = 50;
  */
 const BUN_BODY_CEILING = 64 * 1024 * 1024;
 
+/** herdr-core installed for the move to it, offered once a look for hc found none and herdr-core has a build for this PC. */
+export function herdrCoreInstaller(): HcInstaller {
+  return {
+    offer: () => hcInstallTarget() !== null && herdrCoreFacts()?.version === null ? { version: HC_RELEASE.version } : null,
+    install: async () => {
+      const installed = await installHc({ home: userHome() });
+      // one Ovis's own look does not find: taken out again, so the row offers the install once more
+      if ((await rediscoverHc()) === null) {
+        installed.undo();
+        throw new Error("herdr-core was installed, but Ovis does not find it; it was taken out again");
+      }
+    },
+  };
+}
+
 export interface ServerInstance {
   /** A socket context with this server's services, also usable with transport operations replaced. */
   readonly context: ServerContext;
@@ -161,6 +180,8 @@ export function createServer(
     herdrCoreFacts?: () => HerdrCoreFacts | undefined;
     /** which runtime this server serves and the Settings switch (server/herdr-core/runtime-choice.ts); unset, health tells none and a switch is refused. Tests pass a stand-in. */
     runtimeService?: RuntimeService;
+    /** installs herdr-core for the move to it where the PC has none (server/herdr-core/install.ts); unset, none is offered. Tests pass a stand-in. */
+    herdrCoreInstaller?: HcInstaller;
     /** whether the launcher took this bridge as its own after its startup check (server/supervisor.ts); unset, nothing is told */
     launchAccepted?: () => boolean;
     /** a public address through Portal (server/portal.ts); unset, the app offers none. Tests pass one that runs a stand-in portal. */
@@ -184,6 +205,10 @@ export function createServer(
     machines?: boolean;
     /** how PCs added through the relay reach it (server/relay-pc.ts); tests point it at a local relay */
     relayPcSocket?: (url: string) => RelaySocket;
+    /** how they dial those PCs' direct carriers; tests point it at a local listener */
+    relayPcDirectSocket?: (url: string) => RelaySocket;
+    /** how other PCs on this PC's Tailscale are found (server/tailnet-pcs.ts); tests give their own */
+    tailnetPcs?: TailnetPcsOptions;
     /** a bridge this app starts on a PC (server/remote-entry.ts): its token is the credential its connection server holds, and no browser reaches it, so its snapshots go whole (#2160) */
     bridgeOnly?: boolean;
     /** false: the panes' files are on another machine (server/herdr-core/machine-entry.ts), so no route reads or makes files on this disk for them */
@@ -416,6 +441,18 @@ export function createServer(
     service: (() => { try { return accountServiceUrl(options.accountService?.url); } catch (error) { return error instanceof Error ? error : new Error(String(error)); } })(), ...(options.accountService?.fetch ? { fetch: options.accountService.fetch } : {}),
   });
   const services: RequestServices = {
+    runtimeMove: options.runtimeService ? moveService({
+      stateDir, port: server.port ?? DEFAULT_PORT, serving: runtime, facts: () => options.runtimeService?.facts(),
+      stores: { codexHome: options.codexHome, opencodeDb: options.opencodeDb, hermesHome: options.hermesHome, piReader },
+      holdsPending: core.holdsPending,
+      inputEmpty: core.inputEmpty,
+      lane: core.serialize,
+      settleAfterTyping: core.settleAfterTyping,
+      accepted: () => options.launchAccepted?.() ?? true,
+      switching: () => options.runtimeService?.switching?.() ?? false,
+      switchRuntime: () => { const answer = options.runtimeService!.request("herdr-core"); return answer.ok ? null : answer.message; },
+      ...(options.herdrCoreInstaller ? { installer: options.herdrCoreInstaller } : {}),
+    }) : null,
     options, relay: ovisRelay, relayReceiptIds: new RelayReceiptIds(), hostname, token, bridgeToken, bootId, devices, accountMailbox, accountIntroductions: new AccountIntroductions(Date.now, join(stateDir, "account-introductions.json")), accountHolds, preferences, herdrSidebar, identityOf, serveOnly, portalGuards, shellAgents, agentDetector, agentOffered, agentInstaller, openCodeState, cliProxyRoutes, usageLogin, usage, usageAccounts, systemSampler, fontsDir: join(stateDir, "fonts"), voice, browserSnapshot, core, seen, piReader, orderSequence, clientConnectionLog, requestLog, portalStartup,
     get portalStartupResult() { return portalStartupResult; },
   };
@@ -497,6 +534,7 @@ export function createServer(
       });
     },
     stop: () => {
+      services.runtimeMove?.stop();
       accountMailbox.stop();
       void ovisRelay.shutdown();
       settlePortalStartup({ ok: false, error: new Error("Server stopped before Portal startup cleanup completed") });
@@ -568,15 +606,17 @@ if (import.meta.main) {
   const version = (JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { version: string }).version;
   const telemetry = new Telemetry({ stateDir, version, env: process.env, fetch, previousVersion: () => updates.installed().previous_version, runtime: herdrCore === null ? "herdr" : "herdr-core" });
   const portal = new PortalService({ stateDir });
-  const relay = new RelayService({ stateDir });
+  // the direct carrier on this PC's private and Tailscale addresses, which the phone apps' OvisDirect plugin opens (docs/relay.md)
+  const tailnet = new TailnetIdentitySource();
+  const relay = new RelayService({ stateDir, direct: { tailnetIp: () => tailnet.identity().tailnetIp } });
   const lanConfig = lanHttpsConfig(process.env);
   if (lanConfig !== null && "error" in lanConfig) console.error(`LAN HTTPS is off: ${lanConfig.error}.`);
   let instance: ReturnType<typeof createServer>;
   try {
-    instance = createServer({ updates, herdrUpdate: new HerdrUpdater(), herdrCoreFacts,
+    instance = createServer({ updates, herdrUpdate: new HerdrUpdater(), herdrCoreFacts, herdrCoreInstaller: herdrCoreInstaller(),
       launchAccepted: () => launchAccepted,
       runtimeService: runtimeService({ stateDir, port: Number(startEnv["PORT"] || DEFAULT_PORT), serving: choice.runtime, source: choice.source, ...(fallback ? { fallback } : {}), env: startEnv, core: herdrCoreFacts, accepted: () => launchAccepted, restart: (id) => process.send?.({ type: "runtime-restart", id }) }),
-      portal, relay, telemetry, registerBridge: true, herdrProfiles: readHerdrProfiles, shellAgents: new ShellAgentLocator(), agentDetector: new AgentDetector({ locate: catalogLocator({ probe: defaultLoginProbe() }) }), stateDir, siblingStateDir: siblingStateDir(stateDir),
+      portal, relay, tailnet, telemetry, registerBridge: true, herdrProfiles: readHerdrProfiles, shellAgents: new ShellAgentLocator(), agentDetector: new AgentDetector({ locate: catalogLocator({ probe: defaultLoginProbe() }) }), stateDir, siblingStateDir: siblingStateDir(stateDir),
       desktopActivity: process.env["OVIS_DESKTOP_APP"] === "1",
       ...(lanConfig !== null && !("error" in lanConfig) ? { lanHttps: lanConfig } : {}) });
     instance.warmAgentCatalog();

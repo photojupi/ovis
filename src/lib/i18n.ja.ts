@@ -17,6 +17,7 @@ import { GUIDE_JA } from "./i18n/guide.ja.ts";
 import { UPDATES_JA } from "./i18n/updates.ja.ts";
 import { PALETTE_JA } from "./i18n/palette.ja.ts";
 import { RELAY_JA } from "./i18n/relay.ja.ts";
+import { RUNTIME_MOVE_JA } from "./i18n/runtime-move.ja.ts";
 
 /**
  * Japanese for every `t("…")` in src/ that no part in lib/i18n/ holds: keys more than one feature
@@ -43,6 +44,10 @@ const BASE: Record<string, string> = {
   "Signing in…": "サインイン中…",
   "The sign-in did not finish. Try again.": "サインインが完了しませんでした。もう一度お試しください。",
   "Open {provider} and enter this code. Enter it only if you started this sign-in on this page.": "{provider} を開いてこのコードを入力してください。このページで自分で始めたサインインのときだけ入力してください。",
+  "On any device, open {address} and enter this code, then continue with GitHub or Google. Enter it only if you started this sign-in on this page.": "どの端末でも {address} を開いてこのコードを入力し、GitHub か Google で続けてください。このページで自分で始めたサインインのときだけ入力してください。",
+  "QR code of the sign-in page with this code filled in": "このコードが入力済みのサインインページの QR コード",
+  "Waiting for the sign-in…": "サインインを待っています…",
+  "Open the sign-in page": "サインインページを開く",
   "Waiting for {provider}…": "{provider} の承認を待っています…",
   "Open {provider}": "{provider} を開く",
   "{provider} refused the sign-in.": "{provider} でサインインが拒否されました。",
@@ -54,6 +59,7 @@ const BASE: Record<string, string> = {
   "Sign in again": "もう一度サインイン",
   "Added {date}": "{date} に追加",
   "To change how you sign in, sign in again with {provider} first.": "サインイン方法を変更するには、先に {provider} でもう一度サインインしてください。",
+  "To change how you sign in, sign in again with {provider} on its own sign-in page first.": "サインイン方法を変更するには、先に {provider} 自身のサインインページでもう一度サインインしてください。",
   "Add another way to sign in from the Ovis desktop app.": "別のサインイン方法は Ovis デスクトップアプリから追加してください。",
   "Add {provider}": "{provider} を追加",
   "The code expired. Sign in again to get a new one.": "コードの有効期限が切れました。もう一度サインインして新しいコードを受け取ってください。",
@@ -63,7 +69,14 @@ const BASE: Record<string, string> = {
   "Add {device}?": "{device} を追加しますか？",
   "Through {pc} · joins your {n} PCs": "{pc} 経由 · {n} 台の PC に参加します",
   "Pick the number on {device}": "{device} に表示されている数字を選んでください",
-  "Didn't ask for this? Deny it.": "心当たりがなければ拒否してください。",
+  "Approve only if you started this yourself just now. Didn't ask for it? Deny it.": "今ご自身で始めた場合だけ承認してください。心当たりがなければ拒否してください。",
+  "Network location unknown": "ネットワークの場所は不明",
+  "Network near {place}": "ネットワークの場所: {place} 付近",
+  "The name and system are what the device says. The place is where its network connects from.": "名前とシステムはデバイスの自己申告です。場所はそのネットワークの接続元です。",
+  "This device asked again with other details. Check them, then pick the number again.": "デバイスが別の情報で再度リクエストしました。内容を確認してから、もう一度番号を選んでください。",
+  "Device": "デバイス",
+  "The sign-in was refused.": "サインインが拒否されました。",
+  "This sign-in already belongs to another Ovis account. Nothing was changed.": "このサインインはすでに別の Ovis アカウントで使われています。何も変更されていません。",
   "Deny": "拒否",
   "never": "なし",
   "just now": "たった今",
@@ -193,11 +206,21 @@ const BASE: Record<string, string> = {
   "Filter workspaces and agents": "ワークスペースとエージェントを絞り込む",
   "Connecting…": "接続しています…",
   "Connected": "接続済み",
+  "Add a connection": "接続を追加",
+  "Answers": "応答あり",
+  "Same Wi-Fi, direct": "同じWi-Fiで直接",
+  "Tailscale, direct": "Tailscaleで直接",
+  "Seoul relay": "ソウルのリレー",
+  "Through the relay": "リレー経由",
+  "{n} ms": "{n} ms",
+  "Check now": "今すぐ確認",
+  "Checking…": "確認しています…",
   "relay": "リレー",
   "direct": "直接",
   "local": "ローカル",
   "Via a loopback address: this PC, or a tunnel to it": "ループバックアドレス経由: このPC、またはそこへのトンネル",
   "Via the Ovis relay": "Ovis リレー経由",
+  "Directly on the same network, not through the relay": "同じネットワークでリレーを通さず直接接続",
   "Via the Portal relay": "Portal リレー経由",
   "Via Tailscale": "Tailscale 経由",
   "Via Tailscale, or Funnel from the internet": "Tailscale 経由、またはインターネットから Funnel 経由",
@@ -253,7 +276,6 @@ const BASE: Record<string, string> = {
   "Submit": "送信",
   "Recommended": "推奨",
   "Agents": "エージェント",
-  "Show {name}": "{name} を表示",
   "Check again": "再確認",
   "Setup guide": "セットアップガイド",
   "Could not confirm this browser is paired. Check that cookies are enabled, then try again.": "このブラウザーがペアリング済みであることを確認できませんでした。Cookie が有効か確認して、もう一度お試しください。",
@@ -449,7 +471,7 @@ const BASE: Record<string, string> = {
   "New terminal": "新しいターミナル",
   "New terminal failed: {reason}": "新しいターミナルを開けませんでした: {reason}",
   "herdr prefix: press a key": "herdrプレフィックス: キーを押してください",
-  "Connect a device": "デバイスを接続",
+  "Shell": "シェル",
   "This device": "このデバイス",
   "Sign out of {provider}": "{provider} からサインアウト",
   "Ovis relay": "Ovis リレー",
@@ -481,6 +503,7 @@ export const JA_PARTS: Record<string, Record<string, string>> = {
   updates: UPDATES_JA,
   palette: PALETTE_JA,
   relay: RELAY_JA,
+  "runtime-move": RUNTIME_MOVE_JA,
 };
 
 export const JA: Record<string, string> = Object.assign({}, ...Object.values(JA_PARTS));

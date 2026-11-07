@@ -26,9 +26,10 @@ import { SshConnection, sshClient } from "./ssh.ts";
 import { WAITING_FOR_WINDOWS_LOGIN } from "./windows-herdr-start.ts";
 import { decodeOffer, SERVER_ID_PATTERN, isWssOrigin, type RelayOffer } from "../shared/relay-offer.ts";
 import { offerFromCode, TypedCodeError } from "../shared/relay-code-offer.ts";
+import { TailnetPcError, TailnetPcs, type TailnetPcsOptions } from "./tailnet-pcs.ts";
 
 import type { RelaySocket } from "../shared/relay-channel.ts";
-import { openRelayPcTunnel, RelayPcKey, RelayPcRefused, relayPcLabel, removeRelayPcKey, type RelayPcTunnel } from "./relay-pc.ts";
+import { newRouteProbes, openRelayPcTunnel, RelayPcKey, RelayPcRefused, relayPcLabel, removeRelayPcKey, type RelayPcTunnel, type RouteProbes } from "./relay-pc.ts";
 import type { HcMachine, MachineBridge } from "./herdr-core/machine-bridge.ts";
 
 /** a PC keeps the six-digit code in its offer for 10 minutes at most (server/devices.ts) */
@@ -41,6 +42,8 @@ interface Runtime {
   ssh?: SshConnection;
   /** a PC added through the relay: its connection and loopback forward (server/relay-pc.ts) */
   tunnel?: RelayPcTunnel;
+  /** when its earlier routes were last probed, kept across its tunnels (relay-pc.ts RouteProbes) */
+  routeProbes?: RouteProbes;
   /** another machine of this PC's herdr-core (kind "hc"): what the core calls it, and its server once started (herdr-core/machine-bridge.ts) */
   hc?: { id: string; name: string; bridge?: MachineBridge };
   endpoint?: { url: string; token: string };
@@ -315,6 +318,8 @@ export class MachineManager {
   private ownUpdateCheckMs: number;
   /** how a relay PC's connection reaches the relay; tests point it at a local one */
   private relaySocket?: (url: string) => RelaySocket;
+  /** how a relay PC's connection dials that PC's direct carriers; tests point it at a local one */
+  private relayDirectSocket?: (url: string) => RelaySocket;
   /**
    * PCs typed codes found (relayFoundByCode), waiting for the person to match their IDs, by a random ticket only the
    * asking window gets: each offer holds that PC's one-time code, so another client naming the PC's public ID takes none.
@@ -322,12 +327,16 @@ export class MachineManager {
   private foundByCode = new Map<string, { offer: RelayOffer; at: number }>();
   /** this server's own relay ID, where it has one: the local PC's `server_id` */
   private serverId?: () => string | undefined;
+  /** other PCs of this PC's Tailscale login, added through the relay with one tap (server/tailnet-pcs.ts) */
+  private readonly tailnet: TailnetPcs;
 
   constructor(readonly stateDir: string, private push: PushService, private completions: CompletionTracker, private readLocal: () => Promise<SessionSnapshot> = () => this.completions.readSnapshot(sessionSnapshot, labelOmoPanes),
-    options: { bootId?: string; localFinishEpoch?: () => string; now?: () => number; ownUpdate?: { pollMs?: number; startMs?: number; checkMs?: number }; relaySocket?: (url: string) => RelaySocket; serverId?: () => string | undefined } = {}) {
+    options: { bootId?: string; localFinishEpoch?: () => string; now?: () => number; ownUpdate?: { pollMs?: number; startMs?: number; checkMs?: number }; relaySocket?: (url: string) => RelaySocket; relayDirectSocket?: (url: string) => RelaySocket; serverId?: () => string | undefined; tailnet?: TailnetPcsOptions } = {}) {
     this.bootId = options.bootId;
+    this.tailnet = new TailnetPcs(options.tailnet);
     this.serverId = options.serverId;
     this.relaySocket = options.relaySocket;
+    this.relayDirectSocket = options.relayDirectSocket;
     this.localFinishEpoch = options.localFinishEpoch;
     this.ownUpdatePollMs = options.ownUpdate?.pollMs ?? OWN_UPDATE_POLL_MS;
     this.ownUpdateStartMs = options.ownUpdate?.startMs ?? OWN_UPDATE_START_MS;
@@ -1415,6 +1424,18 @@ export class MachineManager {
     await this.refresh(runtime);
     if (generation !== runtime.generation || this.stopped) throw new Error("Connection cancelled");
     runtime.machine.state = "connected"; runtime.machine.action_required = null; runtime.machine.remote_ovis = null; runtime.attempts = 0; runtime.updateCancelled = false;
+    // told only for a connected PC (shared/machines.ts)
+    if (runtime.tunnel) runtime.machine.route = runtime.tunnel.route;
+    this.openObserver(runtime, generation);
+    if (runtime.ssh) runtime.ssh.onExit = () => this.lost(runtime, generation, new Error("SSH connection ended"));
+    runtime.poll = setInterval(() => void this.refresh(runtime).catch((e) => this.lost(runtime, generation, e)), 5000);
+    runtime.poll.unref();
+  }
+  /** The PC's status-only socket, through its endpoint: its end is the connection's loss. */
+  private openObserver(runtime: Runtime, generation: number): void {
+    // one status socket per PC: one left open would handle every frame twice and outlive disconnect()
+    const previous = runtime.observer;
+    if (previous) { previous.onclose = null; previous.onerror = null; previous.onmessage = null; previous.close(); }
     const endpoint = runtime.endpoint!;
     const ws = authenticatedWebSocket(endpoint.url.replace("http:", "ws:") + "/ws", endpoint.token);
     runtime.observer = ws;
@@ -1447,9 +1468,30 @@ export class MachineManager {
     };
     ws.onclose = () => this.lost(runtime, generation, new Error(runtime.tunnel ? "Relay connection to this PC was lost" : runtime.hc ? "This machine's server connection was lost" : "SSH bridge connection interrupted"));
     ws.onerror = () => ws.close();
-    if (runtime.ssh) runtime.ssh.onExit = () => this.lost(runtime, generation, new Error("SSH connection ended"));
-    runtime.poll = setInterval(() => void this.refresh(runtime).catch((e) => this.lost(runtime, generation, e)), 5000);
-    runtime.poll.unref();
+  }
+  /** How a relay PC's connection reaches it, and what this manager hears back from it. */
+  private tunnelOptions(runtime: Runtime, generation: number): Parameters<typeof openRelayPcTunnel>[2] {
+    return {
+      ...(this.relaySocket ? { socket: this.relaySocket } : {}), ...(this.relayDirectSocket ? { directSocket: this.relayDirectSocket } : {}),
+      onLost: (error) => this.lost(runtime, generation, error),
+      onMoved: () => this.moved(runtime, generation),
+      probes: runtime.routeProbes ??= newRouteProbes(),
+    };
+  }
+  /**
+   * A relay PC's connection moved to a better route (server/relay-pc.ts): the streams of the old one end, so the
+   * status socket opens again on the new one. Open terminals end with their stream as on any reconnect (their clients
+   * come back by themselves, and nothing typed is sent again); requests waiting for the move go on the new route, so
+   * nothing tracked here is ended. The PC stays connected throughout: nothing was lost.
+   */
+  private moved(runtime: Runtime, generation: number): void {
+    // before the first roster read finished, observe() has yet to open the status socket and tell the route: it will
+    if (generation !== runtime.generation || this.stopped || !runtime.tunnel || runtime.machine.state !== "connected") return;
+    this.openObserver(runtime, generation);
+    runtime.machine.route = runtime.tunnel.route;
+    // what changed while the status socket was away
+    void this.refresh(runtime).catch((e) => this.lost(runtime, generation, e));
+    this.emit();
   }
   private lost(runtime: Runtime, generation: number, error: unknown): void {
     if (generation !== runtime.generation || !runtime.machine.enabled || this.stopped) return;
@@ -1528,7 +1570,7 @@ export class MachineManager {
         if (generation !== runtime.generation || this.stopped) return;
         // the PC may run another version or runtime since the last connection: read again once connected
         delete runtime.machine.herdr;
-        const tunnel = await openRelayPcTunnel(key.offer, key, { socket: this.relaySocket, onLost: (error) => this.lost(runtime, generation, error) });
+        const tunnel = await openRelayPcTunnel(key.offer, key, this.tunnelOptions(runtime, generation));
         if (generation !== runtime.generation || this.stopped) { tunnel.close(); return; }
         runtime.tunnel = tunnel; runtime.endpoint = tunnel.endpoint;
         await this.observe(runtime); this.emit();
@@ -1564,7 +1606,7 @@ export class MachineManager {
     runtime.observer?.close(); runtime.observer = undefined;
     for (const close of runtime.terminals) close(); runtime.terminals.clear();
     runtime.ssh?.close(); runtime.ssh = undefined; runtime.endpoint = undefined;
-    runtime.tunnel?.close(); runtime.tunnel = undefined;
+    runtime.tunnel?.close(); runtime.tunnel = undefined; delete runtime.machine.route;
     if (runtime.hc?.bridge) { runtime.hc.bridge.stop(); runtime.hc.bridge = undefined; }
     // what this connection proved goes with it; the start interval stays (sourceStarts)
     runtime.verification?.abort.abort(); runtime.verification = undefined;
@@ -1735,6 +1777,33 @@ export class MachineManager {
     return { ticket, server_id: offer.server_id, name: offer.name ?? null };
   }
 
+  /** the relay IDs of the PCs added through the relay */
+  private relayServerIds(): Set<string> {
+    return new Set([...this.machines.values()].flatMap(({ machine }) => machine.relay ? [machine.relay.server_id] : []));
+  }
+
+  /** Settings → Connect a device → PCs on your Tailscale: those not added yet (server/tailnet-pcs.ts). */
+  listTailnet() {
+    return this.tailnet.list(this.relayServerIds());
+  }
+
+  /**
+   * Settings → Connect a device → PCs on your Tailscale → Add: asks that PC for its code over the tailnet and adds it
+   * as a typed code would. The ID the relay found must be the one that PC named, which the person compares for a
+   * code typed by hand. A code left unspent ends at its own expiry: cancelling it could end a newer one that PC shows.
+   */
+  async addTailnet(url: unknown): Promise<Machine> {
+    const name = this.tailnet.foundAt(url);
+    if (name === null) throw new TailnetPcError("not_found", "That PC is not among those found on Tailscale. Look again.");
+    const asked = await this.tailnet.code(url as string, this.relayServerIds());
+    const found = await this.relayFoundByCode(asked.code);
+    if (found.server_id !== asked.server_id) {
+      this.foundByCode.delete(found.ticket);
+      throw new TailnetPcError("mismatch", "The relay found a different PC than the one asked. Nothing was added.");
+    }
+    return this.addRelay(undefined, name, found.ticket);
+  }
+
   /**
    * Settings → Remote PCs → Add a PC through the relay: pairs with the PC whose pairing link (its Settings → Phone &
    * devices → Copy link) this is, as a phone would, and adds it once that PC admitted this one. The link's code is
@@ -1763,7 +1832,7 @@ export class MachineManager {
     });
     const generation = runtime.generation;
     let tunnel: RelayPcTunnel;
-    try { tunnel = await openRelayPcTunnel(offer, key, { socket: this.relaySocket, onLost: (error) => this.lost(runtime, generation, error) }); }
+    try { tunnel = await openRelayPcTunnel(offer, key, this.tunnelOptions(runtime, generation)); }
     catch (error) {
       removeRelayPcKey(keyPath);
       throw new Error(error instanceof RelayPcRefused ? error.message : `That PC could not be reached through the relay: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
